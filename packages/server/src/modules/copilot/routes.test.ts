@@ -86,7 +86,9 @@ describe('copilot routes', () => {
       payload: { content: 'not json' },
     });
     expect(r.statusCode).toBe(400);
-    expect(r.json().error.code).toBe('INVALID_INPUT');
+    const body = r.json();
+    expect(body.success).toBe(false);
+    expect(body.error).toMatch(/valid JSON/);
   });
 
   it('GET /api/copilot/logs returns empty when missing', async () => {

@@ -5,19 +5,15 @@ import { ZodError } from 'zod';
 export const errorHandlerPlugin = fp(async (app) => {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof AppError) {
-      reply.status(err.statusCode).send({ error: { code: err.code, message: err.message } });
+      reply.status(err.statusCode).send({ success: false, error: err.message });
       return;
     }
     if (err instanceof ZodError) {
-      reply.status(400).send({
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-        },
-      });
+      const message = err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      reply.status(400).send({ success: false, error: message });
       return;
     }
     app.log.error({ err }, 'unhandled error');
-    reply.status(500).send({ error: { code: 'INTERNAL', message: 'internal error' } });
+    reply.status(500).send({ success: false, error: 'internal error' });
   });
 });
