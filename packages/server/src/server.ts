@@ -11,6 +11,7 @@ import { claudeProvidersModule } from './modules/claude-providers/routes.js';
 import { claudeVersionModule } from './modules/claude-version/routes.js';
 import { claudePluginModule } from './modules/claude-plugin/routes.js';
 import { codexVersionModule } from './modules/codex-version/routes.js';
+import { codexAccountsModule } from './modules/codex-accounts/routes.js';
 import { codexAgentsModule } from './modules/codex-agents/routes.js';
 import { codexAssetsModule } from './modules/codex-assets/routes.js';
 import { codexMCPModule } from './modules/codex-mcp/routes.js';
@@ -37,6 +38,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   await app.register(claudeVersionModule, { deps });
   await app.register(claudePluginModule, { deps });
   await app.register(codexVersionModule, { deps });
+  await app.register(codexAccountsModule, { deps });
   await app.register(codexAgentsModule, { deps });
   await app.register(codexAssetsModule, { deps });
   await app.register(codexMCPModule, { deps });
