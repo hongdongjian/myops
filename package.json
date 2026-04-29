@@ -1,0 +1,25 @@
+{
+  "name": "myops-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "concurrently -k -n server,web \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm -w packages/server run dev",
+    "dev:web": "npm -w packages/web run dev",
+    "build": "npm -w packages/web run build && npm -w packages/server run build && tsx scripts/postbuild.ts",
+    "test": "npm -w packages/server run test && npm -w packages/web run test",
+    "lint": "eslint packages --ext .ts,.tsx",
+    "typecheck": "tsc -b packages/server packages/web --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/parser": "^7.7.0",
+    "@typescript-eslint/eslint-plugin": "^7.7.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": { "node": ">=20" }
+}

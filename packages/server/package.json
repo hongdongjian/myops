@@ -1,0 +1,36 @@
+{
+  "name": "my-ops",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "my-ops": "dist/cli.js" },
+  "main": "dist/server.js",
+  "files": ["dist", "conf"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "tsx watch src/cli.ts --root ../..",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "fastify": "^4.26.0",
+    "@fastify/static": "^7.0.0",
+    "@fastify/cors": "^9.0.0",
+    "fastify-plugin": "^4.5.1",
+    "zod": "^3.22.0",
+    "yaml": "^2.4.0",
+    "async-mutex": "^0.5.0",
+    "node-cache": "^5.1.2",
+    "node-cron": "^3.0.3",
+    "commander": "^12.0.0",
+    "execa": "^9.0.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.5.0"
+  }
+}
