@@ -4,6 +4,7 @@ import { copilotModule } from './modules/copilot/routes.js';
 import { copilotAccountsModule } from './modules/copilot-accounts/routes.js';
 import { mcpModule } from './modules/mcp/routes.js';
 import { claudeSettingsModule } from './modules/claude-settings/routes.js';
+import { claudeMCPModule } from './modules/claude-mcp/routes.js';
 import type { Deps } from './deps.js';
 
 export async function buildApp(deps: Deps): Promise<FastifyInstance> {
@@ -19,6 +20,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   await app.register(copilotModule, { deps });
   await app.register(mcpModule, { deps });
   await app.register(claudeSettingsModule, { deps });
+  await app.register(claudeMCPModule, { deps });
 
   return app;
 }
