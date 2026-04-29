@@ -4,7 +4,10 @@ dist/
 *.log
 data/
 packages/server/dist/
+packages/server/conf/
 packages/web/dist/
+dist-pack/
+packages/server/*.tgz
 .vite/
 coverage/
 *.tsbuildinfo

@@ -1,4 +1,8 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import staticPlugin from '@fastify/static';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { errorHandlerPlugin } from './plugins/error-handler.js';
 import { copilotModule } from './modules/copilot/routes.js';
 import { copilotAccountsModule } from './modules/copilot-accounts/routes.js';
@@ -53,6 +57,19 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   await app.register(clashModule, { deps });
   await app.register(cloudreveModule, { deps });
   await app.register(immichSyncModule, { deps });
+
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const publicDir = path.join(here, 'public');
+  if (fs.existsSync(publicDir)) {
+    await app.register(staticPlugin, { root: publicDir, prefix: '/' });
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith('/api/')) {
+        reply.status(404).send({ success: false, error: 'not found' });
+      } else {
+        reply.sendFile('index.html');
+      }
+    });
+  }
 
   return app;
 }
