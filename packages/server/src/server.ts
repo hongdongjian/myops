@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { errorHandlerPlugin } from './plugins/error-handler.js';
 import { copilotModule } from './modules/copilot/routes.js';
 import { copilotAccountsModule } from './modules/copilot-accounts/routes.js';
+import { mcpModule } from './modules/mcp/routes.js';
 import type { Deps } from './deps.js';
 
 export async function buildApp(deps: Deps): Promise<FastifyInstance> {
@@ -15,6 +16,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     await app.register(copilotAccountsModule, { deps });
   }
   await app.register(copilotModule, { deps });
+  await app.register(mcpModule, { deps });
 
   return app;
 }
