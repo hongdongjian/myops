@@ -3,6 +3,10 @@ import { cn } from './lib/cn';
 import { Copilot } from './routes/copilot';
 import { Mcp } from './routes/mcp';
 import { Claude } from './routes/claude';
+import { Codex } from './routes/codex';
+import { Scheduler } from './routes/scheduler';
+import { Assets } from './routes/assets';
+import { Sync } from './routes/sync';
 
 const navs = [
   { to: '/copilot', label: 'Copilot' },
@@ -40,10 +44,10 @@ export function App() {
           <Route path="/copilot/*" element={<Copilot />} />
           <Route path="/mcp/*" element={<Mcp />} />
           <Route path="/claude/*" element={<Claude />} />
-          <Route path="/codex/*" element={<div className="text-muted-foreground">codex (placeholder)</div>} />
-          <Route path="/scheduler/*" element={<div className="text-muted-foreground">scheduler (placeholder)</div>} />
-          <Route path="/assets/*" element={<div className="text-muted-foreground">assets (placeholder)</div>} />
-          <Route path="/sync/*" element={<div className="text-muted-foreground">sync (placeholder)</div>} />
+          <Route path="/codex/*" element={<Codex />} />
+          <Route path="/scheduler/*" element={<Scheduler />} />
+          <Route path="/assets/*" element={<Assets />} />
+          <Route path="/sync/*" element={<Sync />} />
         </Routes>
       </main>
     </div>
