@@ -16,6 +16,11 @@ import { codexAgentsModule } from './modules/codex-agents/routes.js';
 import { codexAssetsModule } from './modules/codex-assets/routes.js';
 import { codexMCPModule } from './modules/codex-mcp/routes.js';
 import { codexSettingsModule } from './modules/codex-settings/routes.js';
+import { assetsModule } from './modules/assets/routes.js';
+import { schedulerModule } from './modules/scheduler/routes.js';
+import { clashModule } from './modules/clash/routes.js';
+import { cloudreveModule } from './modules/cloudreve/routes.js';
+import { immichSyncModule } from './modules/immich-sync/routes.js';
 import type { Deps } from './deps.js';
 
 export async function buildApp(deps: Deps): Promise<FastifyInstance> {
@@ -43,6 +48,11 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   await app.register(codexAssetsModule, { deps });
   await app.register(codexMCPModule, { deps });
   await app.register(codexSettingsModule, { deps });
+  await app.register(assetsModule, { deps });
+  await app.register(schedulerModule, { deps });
+  await app.register(clashModule, { deps });
+  await app.register(cloudreveModule, { deps });
+  await app.register(immichSyncModule, { deps });
 
   return app;
 }
