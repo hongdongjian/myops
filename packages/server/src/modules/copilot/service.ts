@@ -358,7 +358,21 @@ export class CopilotService {
   async setAutostart(enabled: boolean): Promise<{ enabled: boolean }> {
     this.autostartEnabled = enabled;
     await this.persistAutostart(enabled);
+    if (enabled) {
+      void this.autostartCheck();
+    }
     return { enabled };
+  }
+
+  async autostartCheck(): Promise<void> {
+    if (!this.autostartEnabled) return;
+    const status = this.deps.processMgr.status(COPILOT_PROCESS_NAME);
+    if (status.running) return;
+    try {
+      await this.startProcess();
+    } catch (err) {
+      this.appendEventLog('AUTOSTART_ERROR', (err as Error).message);
+    }
   }
 
   private loadAutostartSetting(): boolean {

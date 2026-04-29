@@ -11,6 +11,7 @@ import { StateStore } from './core/process/state.js';
 import { ProcessManager } from './core/process/manager.js';
 import { buildApp } from './server.js';
 import { CopilotAccountsService } from './modules/copilot-accounts/service.js';
+import { startAutostartLoops, stopAutostartLoops } from './core/autostart.js';
 
 const program = new Command();
 program.name('my-ops').version('0.1.0');
@@ -28,8 +29,20 @@ program
     const processMgr = new ProcessManager(store, paths.dataPath('logs'));
     const runner = new Runner();
     const copilotAccounts = new CopilotAccountsService(paths);
-    const app = await buildApp({ config, paths, runner, store, processMgr, copilotAccounts });
+    const deps = { config, paths, runner, store, processMgr, copilotAccounts };
+    const app = await buildApp(deps);
     await app.listen({ port, host: '127.0.0.1' });
+    startAutostartLoops(deps);
+    const shutdown = async () => {
+      stopAutostartLoops();
+      try {
+        await app.close();
+      } finally {
+        process.exit(0);
+      }
+    };
+    process.on('SIGTERM', () => void shutdown());
+    process.on('SIGINT', () => void shutdown());
   });
 
 program.command('version').action(() => console.log('0.1.0'));
