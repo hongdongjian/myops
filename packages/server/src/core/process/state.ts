@@ -4,6 +4,22 @@ import path from 'node:path';
 export interface ProcessState {
   pid: number;
   startedAt: number;
+  command: string;
+  args: string[];
+  logPath: string;
+}
+
+function isValidState(value: unknown): value is ProcessState {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.pid === 'number' &&
+    typeof v.startedAt === 'number' &&
+    typeof v.command === 'string' &&
+    Array.isArray(v.args) &&
+    v.args.every((a) => typeof a === 'string') &&
+    typeof v.logPath === 'string'
+  );
 }
 
 export class StateStore {
@@ -12,7 +28,12 @@ export class StateStore {
   constructor(private filePath: string) {
     if (fs.existsSync(filePath)) {
       try {
-        this.data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+        const valid: Record<string, ProcessState> = {};
+        for (const [k, v] of Object.entries(parsed ?? {})) {
+          if (isValidState(v)) valid[k] = v;
+        }
+        this.data = valid;
       } catch {
         this.data = {};
       }
@@ -22,7 +43,13 @@ export class StateStore {
   }
 
   get(key: string): ProcessState | undefined {
-    return this.data[key];
+    const v = this.data[key];
+    if (!v) return undefined;
+    if (!isValidState(v)) {
+      this.delete(key);
+      return undefined;
+    }
+    return v;
   }
 
   set(key: string, value: ProcessState): void {

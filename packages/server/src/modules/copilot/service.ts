@@ -115,9 +115,9 @@ export class CopilotService {
       name: COPILOT_PROCESS_NAME,
       running: true,
       pid: status.pid ?? 0,
-      logPath: this.logPath(),
-      command: 'copilot-api',
-      args: this.startArgs(),
+      logPath: status.logPath ?? '',
+      command: status.command ?? '',
+      args: status.args ?? [],
       startedAt: status.startedAt ? new Date(status.startedAt).toISOString() : '',
     };
   }

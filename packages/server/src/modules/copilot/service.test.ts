@@ -31,16 +31,29 @@ function makeDeps(): { deps: Deps; tmp: string; runs: Array<{ cmd: string; args:
       return { stdout: '', stderr: '', code: 0 };
     },
   };
-  const procStore = new Map<string, { pid: number; startedAt: number }>();
+  const procStore = new Map<string, { pid: number; startedAt: number; command: string; args: string[]; logPath: string }>();
   const processMgr = {
-    async spawn(name: string, _spec: any) {
-      procStore.set(name, { pid: 1234, startedAt: Date.now() });
+    async spawn(name: string, spec: any) {
+      procStore.set(name, {
+        pid: 1234,
+        startedAt: Date.now(),
+        command: spec.cmd,
+        args: spec.args ?? [],
+        logPath: paths.dataPath('logs', `${name}.log`),
+      });
       return { pid: 1234 };
     },
     status(name: string) {
       const s = procStore.get(name);
       if (!s) return { running: false };
-      return { running: true, pid: s.pid, startedAt: s.startedAt };
+      return {
+        running: true,
+        pid: s.pid,
+        startedAt: s.startedAt,
+        command: s.command,
+        args: [...s.args],
+        logPath: s.logPath,
+      };
     },
     async stop(name: string) {
       procStore.delete(name);
@@ -158,5 +171,18 @@ describe('CopilotService', () => {
     expect(status.version.installed).toBe(true);
     expect(status.auth).toBeNull();
     expect(status.sourceUrl).toContain('github.com');
+  });
+
+  it('getProcessStatus reflects real cmd/args/logPath from processMgr after start', async () => {
+    const { deps } = makeDeps();
+    const svc = new CopilotService(deps);
+    await svc.setProxy(true);
+    await svc.startProcess();
+    const ps = svc.getProcessStatus();
+    expect(ps.running).toBe(true);
+    expect(ps.command).toBe('copilot-api');
+    expect(ps.args).toEqual(['start', '--proxy-env']);
+    expect(ps.logPath).toContain('copilot-api.log');
+    expect(ps.startedAt).not.toBe('');
   });
 });

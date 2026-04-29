@@ -16,11 +16,18 @@ export interface ProcessStatus {
   pid?: number;
   startedAt?: number;
   uptimeMs?: number;
+  command?: string;
+  args?: string[];
+  logPath?: string;
 }
 
 export class ProcessManager {
   constructor(private store: StateStore, private logsDir: string) {
     fs.mkdirSync(logsDir, { recursive: true });
+  }
+
+  logPathFor(name: string): string {
+    return path.join(this.logsDir, `${name}.log`);
   }
 
   async spawn(name: string, spec: SpawnSpec): Promise<{ pid: number }> {
@@ -29,9 +36,10 @@ export class ProcessManager {
     }
     const env = { ...process.env, ...spec.env };
     if (spec.stripClaudeCode) delete env.CLAUDECODE;
-    const logFile = path.join(this.logsDir, `${name}.log`);
+    const logFile = this.logPathFor(name);
     const fd = fs.openSync(logFile, 'a');
-    const child = spawn(spec.cmd, spec.args ?? [], {
+    const args = spec.args ?? [];
+    const child = spawn(spec.cmd, args, {
       cwd: spec.cwd,
       env,
       detached: true,
@@ -39,7 +47,13 @@ export class ProcessManager {
     });
     child.unref();
     const pid = child.pid!;
-    this.store.set(name, { pid, startedAt: Date.now() });
+    this.store.set(name, {
+      pid,
+      startedAt: Date.now(),
+      command: spec.cmd,
+      args: [...args],
+      logPath: logFile,
+    });
     return { pid };
   }
 
@@ -50,7 +64,15 @@ export class ProcessManager {
       this.store.delete(name);
       return { running: false };
     }
-    return { running: true, pid: s.pid, startedAt: s.startedAt, uptimeMs: Date.now() - s.startedAt };
+    return {
+      running: true,
+      pid: s.pid,
+      startedAt: s.startedAt,
+      uptimeMs: Date.now() - s.startedAt,
+      command: s.command,
+      args: [...s.args],
+      logPath: s.logPath,
+    };
   }
 
   async stop(name: string, timeoutMs = 3000): Promise<void> {

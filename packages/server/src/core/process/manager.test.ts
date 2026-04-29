@@ -19,15 +19,33 @@ describe('ProcessManager', () => {
     try { await mgr.stop('quick'); } catch {}
   });
 
-  it('spawns and reports running, then stops', async () => {
+  it('spawns and reports running with full metadata, then stops', async () => {
     const r = await mgr.spawn('sleeper', { cmd: 'sleep', args: ['5'] });
     expect(r.pid).toBeGreaterThan(0);
     const s = mgr.status('sleeper');
     expect(s.running).toBe(true);
     expect(s.pid).toBe(r.pid);
+    expect(s.command).toBe('sleep');
+    expect(s.args).toEqual(['5']);
+    expect(s.logPath).toBe(path.join(tmp, 'logs', 'sleeper.log'));
+    expect(typeof s.startedAt).toBe('number');
     await mgr.stop('sleeper');
     const s2 = mgr.status('sleeper');
     expect(s2.running).toBe(false);
+  });
+
+  it('persists metadata across StateStore reloads', async () => {
+    await mgr.spawn('sleeper', { cmd: 'sleep', args: ['5'] });
+    const reloaded = new ProcessManager(
+      new StateStore(path.join(tmp, 'state.json')),
+      path.join(tmp, 'logs'),
+    );
+    const s = reloaded.status('sleeper');
+    expect(s.running).toBe(true);
+    expect(s.command).toBe('sleep');
+    expect(s.args).toEqual(['5']);
+    expect(s.logPath).toBe(path.join(tmp, 'logs', 'sleeper.log'));
+    await reloaded.stop('sleeper');
   });
 
   it('detects dead pid and cleans state', async () => {
