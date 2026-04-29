@@ -10,6 +10,7 @@ import { Runner } from './core/system/runner.js';
 import { StateStore } from './core/process/state.js';
 import { ProcessManager } from './core/process/manager.js';
 import { buildApp } from './server.js';
+import { CopilotAccountsService } from './modules/copilot-accounts/service.js';
 
 const program = new Command();
 program.name('my-ops').version('0.1.0');
@@ -26,7 +27,8 @@ program
     const store = new StateStore(paths.dataPath('state.json'));
     const processMgr = new ProcessManager(store, paths.dataPath('logs'));
     const runner = new Runner();
-    const app = await buildApp({ config, paths, runner, store, processMgr });
+    const copilotAccounts = new CopilotAccountsService(paths);
+    const app = await buildApp({ config, paths, runner, store, processMgr, copilotAccounts });
     await app.listen({ port, host: '127.0.0.1' });
   });
 

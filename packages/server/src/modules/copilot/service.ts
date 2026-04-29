@@ -12,6 +12,7 @@ import type {
   UsageQuotaSnapshot,
   ApiEnvelope,
 } from './schema.js';
+import type { CopilotAuthSnapshot } from '../copilot-accounts/schema.js';
 
 export const COPILOT_PROCESS_NAME = 'copilot-api';
 export const COPILOT_SOURCE_URL = 'https://github.com/caozhiyuan/copilot-api/tree/all';
@@ -80,7 +81,7 @@ export class CopilotService {
     process: ProcessStatus;
     health: { healthy: boolean; state: string };
     version: VersionStatus;
-    auth: null;
+    auth: CopilotAuthSnapshot | null;
     sourceUrl: string;
   }> {
     const procStatus = this.getProcessStatus();
@@ -89,11 +90,14 @@ export class CopilotService {
       healthy: procStatus.running,
       state: procStatus.running ? 'ACTIVE' : 'ERROR',
     };
+    const auth = this.deps.copilotAccounts
+      ? await this.deps.copilotAccounts.getAuthSnapshot()
+      : null;
     return {
       process: procStatus,
       health,
       version,
-      auth: null,
+      auth,
       sourceUrl: COPILOT_SOURCE_URL,
     };
   }
@@ -123,6 +127,10 @@ export class CopilotService {
   }
 
   async startProcess(): Promise<ProcessStatus> {
+    if (this.deps.copilotAccounts) {
+      const account = await this.deps.copilotAccounts.prepareCurrent();
+      await this.deps.copilotAccounts.writeCurrentToken(account);
+    }
     const env = this.startEnv();
     await this.deps.processMgr.spawn(COPILOT_PROCESS_NAME, {
       cmd: 'copilot-api',

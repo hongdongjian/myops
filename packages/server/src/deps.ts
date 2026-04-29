@@ -3,6 +3,7 @@ import type { Paths } from './paths.js';
 import type { Runner } from './core/system/runner.js';
 import type { StateStore } from './core/process/state.js';
 import type { ProcessManager } from './core/process/manager.js';
+import type { CopilotAccountsService } from './modules/copilot-accounts/service.js';
 
 export interface Deps {
   config: Config;
@@ -10,4 +11,5 @@ export interface Deps {
   runner: Runner;
   store: StateStore;
   processMgr: ProcessManager;
+  copilotAccounts?: CopilotAccountsService;
 }
