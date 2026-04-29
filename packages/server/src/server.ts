@@ -9,6 +9,7 @@ import { claudeAssetsModule } from './modules/claude-assets/routes.js';
 import { claudeInstructionsModule } from './modules/claude-instructions/routes.js';
 import { claudeProvidersModule } from './modules/claude-providers/routes.js';
 import { claudeVersionModule } from './modules/claude-version/routes.js';
+import { claudePluginModule } from './modules/claude-plugin/routes.js';
 import type { Deps } from './deps.js';
 
 export async function buildApp(deps: Deps): Promise<FastifyInstance> {
@@ -29,6 +30,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   await app.register(claudeInstructionsModule, { deps });
   await app.register(claudeProvidersModule, { deps });
   await app.register(claudeVersionModule, { deps });
+  await app.register(claudePluginModule, { deps });
 
   return app;
 }
