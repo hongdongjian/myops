@@ -14,6 +14,7 @@ import { codexVersionModule } from './modules/codex-version/routes.js';
 import { codexAgentsModule } from './modules/codex-agents/routes.js';
 import { codexAssetsModule } from './modules/codex-assets/routes.js';
 import { codexMCPModule } from './modules/codex-mcp/routes.js';
+import { codexSettingsModule } from './modules/codex-settings/routes.js';
 import type { Deps } from './deps.js';
 
 export async function buildApp(deps: Deps): Promise<FastifyInstance> {
@@ -39,6 +40,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   await app.register(codexAgentsModule, { deps });
   await app.register(codexAssetsModule, { deps });
   await app.register(codexMCPModule, { deps });
+  await app.register(codexSettingsModule, { deps });
 
   return app;
 }

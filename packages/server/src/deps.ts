@@ -5,6 +5,10 @@ import type { StateStore } from './core/process/state.js';
 import type { ProcessManager } from './core/process/manager.js';
 import type { CopilotAccountsService } from './modules/copilot-accounts/service.js';
 
+export interface CodexAccountsHook {
+  writeSelectedAuthIfAny(): Promise<void>;
+}
+
 export interface Deps {
   config: Config;
   paths: Paths;
@@ -12,4 +16,5 @@ export interface Deps {
   store: StateStore;
   processMgr: ProcessManager;
   copilotAccounts?: CopilotAccountsService;
+  codexAccounts?: CodexAccountsHook;
 }

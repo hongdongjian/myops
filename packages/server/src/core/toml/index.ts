@@ -143,3 +143,149 @@ export function formatTomlInlineTable(values: Record<string, string>): string {
   const parts = keys.map((k) => `${quoteString(k)} = ${quoteString(values[k] ?? '')}`);
   return `{ ${parts.join(', ')} }`;
 }
+
+export function stripTomlInlineComment(value: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+    if (char === '\\') {
+      escaped = inDouble && !escaped;
+      continue;
+    }
+    if (char === '"') {
+      if (!inSingle && !escaped) inDouble = !inDouble;
+    } else if (char === "'") {
+      if (!inDouble) inSingle = !inSingle;
+    } else if (char === '#') {
+      if (!inSingle && !inDouble) return value.slice(0, index);
+    }
+    escaped = false;
+  }
+  return value;
+}
+
+export function findTomlStringValue(content: string, section: string, key: string): { value: string; ok: boolean } {
+  const lines = content.split('\n');
+  let activeSection = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+    const sec = parseTomlSection(trimmed);
+    if (sec.ok) {
+      activeSection = sec.section;
+      continue;
+    }
+    if (activeSection !== section) continue;
+    const kv = parseTomlKeyValue(trimmed);
+    if (!kv.ok || kv.key !== key) continue;
+    const value = stripTomlInlineComment(kv.value).trim();
+    if (value === '') return { value: '', ok: true };
+    if (value.startsWith('"')) {
+      try {
+        return { value: JSON.parse(value) as string, ok: true };
+      } catch {
+        // fall through to literal
+      }
+    }
+    if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
+      return { value: value.slice(1, -1), ok: true };
+    }
+    return { value, ok: true };
+  }
+  return { value: '', ok: false };
+}
+
+export function hasSectionInToml(content: string, section: string): boolean {
+  for (const line of content.split('\n')) {
+    const sec = parseTomlSection(line.trim());
+    if (sec.ok && sec.section === section) return true;
+  }
+  return false;
+}
+
+export function removeTomlSection(content: string, section: string): string {
+  const lines = content.split('\n');
+  const result: string[] = [];
+  let inTarget = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const sec = parseTomlSection(trimmed);
+    if (sec.ok) {
+      inTarget = sec.section === section;
+      if (inTarget) continue;
+    }
+    if (!inTarget) result.push(line);
+  }
+  while (result.length > 0 && (result[result.length - 1] ?? '').trim() === '') {
+    result.pop();
+  }
+  if (result.length > 0) result.push('');
+  return result.join('\n');
+}
+
+export function removeTomlKeyFromSection(content: string, section: string, key: string): string {
+  const lines = content.split('\n');
+  const result: string[] = [];
+  let activeSection = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const sec = parseTomlSection(trimmed);
+    if (sec.ok) {
+      activeSection = sec.section;
+      result.push(line);
+      continue;
+    }
+    if (activeSection === section) {
+      const kv = parseTomlKeyValue(trimmed);
+      if (kv.ok && kv.key === key) continue;
+    }
+    result.push(line);
+  }
+  return result.join('\n');
+}
+
+export function removeTomlRootKey(content: string, key: string): string {
+  const lines = content.split('\n');
+  const result: string[] = [];
+  let inSection = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const sec = parseTomlSection(trimmed);
+    if (sec.ok) {
+      inSection = true;
+      result.push(line);
+      continue;
+    }
+    if (inSection) {
+      result.push(line);
+      continue;
+    }
+    const kv = parseTomlKeyValue(trimmed);
+    if (kv.ok && kv.key === key) continue;
+    result.push(line);
+  }
+  return result.join('\n');
+}
+
+export function syncTomlExistingKeysFromTemplate(homeContent: string, templateContent: string): string {
+  let updated = homeContent;
+  const lines = templateContent.split('\n');
+  let activeSection = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const sec = parseTomlSection(trimmed);
+    if (sec.ok) {
+      activeSection = sec.section;
+      continue;
+    }
+    const kv = parseTomlKeyValue(trimmed);
+    if (!kv.ok) continue;
+    const value = stripTomlInlineComment(kv.value).trim();
+    if (value === '') continue;
+    const r = setTomlRawValue(updated, activeSection, kv.key, value, true);
+    updated = r.content;
+  }
+  return updated;
+}
