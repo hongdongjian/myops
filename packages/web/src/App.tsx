@@ -2,6 +2,7 @@ import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { cn } from './lib/cn';
 import { Copilot } from './routes/copilot';
 import { Mcp } from './routes/mcp';
+import { Claude } from './routes/claude';
 
 const navs = [
   { to: '/copilot', label: 'Copilot' },
@@ -38,7 +39,7 @@ export function App() {
           <Route path="/" element={<Navigate to="/copilot" replace />} />
           <Route path="/copilot/*" element={<Copilot />} />
           <Route path="/mcp/*" element={<Mcp />} />
-          <Route path="/claude/*" element={<div className="text-muted-foreground">claude (placeholder)</div>} />
+          <Route path="/claude/*" element={<Claude />} />
           <Route path="/codex/*" element={<div className="text-muted-foreground">codex (placeholder)</div>} />
           <Route path="/scheduler/*" element={<div className="text-muted-foreground">scheduler (placeholder)</div>} />
           <Route path="/assets/*" element={<div className="text-muted-foreground">assets (placeholder)</div>} />
