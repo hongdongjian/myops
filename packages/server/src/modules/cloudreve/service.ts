@@ -196,7 +196,7 @@ export class CloudreveService {
       token,
       body: { page: 1, page_size: 100 },
     });
-    const policies = (data?.data?.policies ?? []) as Array<{ id: number; name: string; type: string }>;
+    const policies = ((data as any)?.data?.policies ?? []) as Array<{ id: number; name: string; type: string }>;
     return policies.map((p) => ({ id: String(p.id), name: p.name, type: p.type }));
   }
 
@@ -207,7 +207,7 @@ export class CloudreveService {
       token,
       body: { page: 1, page_size: 100 },
     });
-    const users = (data?.data?.users ?? []) as Array<{ hash_id: string; email: string; nick: string }>;
+    const users = ((data as any)?.data?.users ?? []) as Array<{ hash_id: string; email: string; nick: string }>;
     return users.map((u) => ({ hashId: u.hash_id, email: u.email, nick: u.nick }));
   }
 
