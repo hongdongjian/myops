@@ -72,6 +72,8 @@ export class ClaudeProvidersService {
         token,
         model: req.model.trim(),
         haikuModel: req.haikuModel.trim(),
+        sonnetModel: (req.sonnetModel ?? '').trim(),
+        opusModel: (req.opusModel ?? '').trim(),
       },
     ];
     await this.writeStore(store);
@@ -92,6 +94,8 @@ export class ClaudeProvidersService {
         token: req.token.trim(),
         model: req.model.trim(),
         haikuModel: req.haikuModel.trim(),
+        sonnetModel: (req.sonnetModel ?? '').trim(),
+        opusModel: (req.opusModel ?? '').trim(),
       };
     });
     if (!found) throw new AppError('NOT_FOUND', 'provider not found', 404);
@@ -139,17 +143,20 @@ export class ClaudeProvidersService {
     if (found.token) env.ANTHROPIC_AUTH_TOKEN = found.token;
     else delete env.ANTHROPIC_AUTH_TOKEN;
 
-    const renderModel = this.settings.isRenderModelEnvEnabled();
-    if (renderModel && found.model) {
-      env.ANTHROPIC_MODEL = found.model;
-      env.ANTHROPIC_DEFAULT_OPUS_MODEL = found.model;
-      env.ANTHROPIC_DEFAULT_SONNET_MODEL = found.model;
+    const sonnet = found.sonnetModel || found.model;
+    const opus = found.opusModel || found.model;
+    const haiku = found.haikuModel;
+
+    if (sonnet) {
+      env.ANTHROPIC_MODEL = sonnet;
+      env.ANTHROPIC_DEFAULT_SONNET_MODEL = sonnet;
     } else {
       delete env.ANTHROPIC_MODEL;
-      delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
       delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
     }
-    if (renderModel && found.haikuModel) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = found.haikuModel;
+    if (opus) env.ANTHROPIC_DEFAULT_OPUS_MODEL = opus;
+    else delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
+    if (haiku) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = haiku;
     else delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
     m.env = env;
 

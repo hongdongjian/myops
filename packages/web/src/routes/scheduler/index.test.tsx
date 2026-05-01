@@ -31,9 +31,9 @@ describe('Scheduler page', () => {
     vi.stubGlobal('fetch', makeFetchStub());
   });
 
-  it('renders empty state and 新建任务 button', async () => {
+  it('renders empty state and New Task button', async () => {
     wrap(<Scheduler />);
-    expect(screen.getByRole('button', { name: '新建任务' })).toBeInTheDocument();
-    expect(await screen.findByText(/暂无任务/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New Task' })).toBeInTheDocument();
+    expect(await screen.findByText(/No tasks/)).toBeInTheDocument();
   });
 });

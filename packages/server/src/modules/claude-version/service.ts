@@ -1,7 +1,7 @@
 import NodeCache from 'node-cache';
 import type { Deps } from '../../deps.js';
 import { AppError } from '../../core/errors.js';
-import { ClaudeSettingsService, MODEL_ENV_KEYS } from '../claude-settings/service.js';
+import { ClaudeSettingsService } from '../claude-settings/service.js';
 import type { VersionOperationStatus, VersionStatus } from './schema.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -160,20 +160,8 @@ export class ClaudeVersionService {
     const settingsPath = settings.settingsPath();
     try {
       const tmpl = await fs.readFile(templatePath, 'utf-8');
-      let body = tmpl;
-      if (!settings.isRenderModelEnvEnabled()) {
-        try {
-          const obj = JSON.parse(tmpl) as Record<string, unknown>;
-          const env = (obj.env as Record<string, unknown> | undefined) ?? {};
-          for (const key of MODEL_ENV_KEYS) delete env[key];
-          obj.env = env;
-          body = JSON.stringify(obj, null, 2);
-        } catch {
-          /* leave body as-is */
-        }
-      }
       await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-      await fs.writeFile(settingsPath, body);
+      await fs.writeFile(settingsPath, tmpl);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }

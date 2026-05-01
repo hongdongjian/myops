@@ -1,14 +1,15 @@
 import { z } from 'zod';
 
-export const CopyPackageRequestSchema = z.object({
-  sourcePath: z.string().optional(),
-});
-export type CopyPackageRequest = z.infer<typeof CopyPackageRequestSchema>;
-
 export const AutostartSetRequestSchema = z.object({
   enabled: z.boolean(),
 });
 export type AutostartSetRequest = z.infer<typeof AutostartSetRequestSchema>;
+
+export const BinaryConfigSaveRequestSchema = z.object({
+  loginBinaryPath: z.string(),
+  serverBinaryPath: z.string(),
+});
+export type BinaryConfigSaveRequest = z.infer<typeof BinaryConfigSaveRequestSchema>;
 
 export const LogsQuerySchema = z.object({
   lines: z.string().optional(),

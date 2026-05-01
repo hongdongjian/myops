@@ -4,6 +4,10 @@ import type { Deps } from '../../deps.js';
 import { AppError } from '../../core/errors.js';
 import { setTomlRawValue, formatTomlInlineTable } from '../../core/toml/index.js';
 import type {
+  CodexMCPActiveOp,
+  CodexMCPOpAction,
+  CodexMCPPresetCreateRequest,
+  CodexMCPPresetUpdateRequest,
   CodexMCPPresetDefinition,
   CodexMCPPresetInstallConfig,
   CodexMCPPresetStatus,
@@ -11,10 +15,61 @@ import type {
 
 interface CodexMCPListItem {
   name?: string;
+  transport?: {
+    type?: string;
+    url?: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string> | null;
+    bearer_token_env_var?: string | null;
+    http_headers?: Record<string, string> | null;
+  } | null;
+}
+
+function listItemToInstallConfig(item: CodexMCPListItem): CodexMCPPresetInstallConfig | null {
+  const t = item.transport;
+  if (!t) return null;
+  if (t.type === 'stdio') {
+    const cmd: string[] = [];
+    if (t.command) cmd.push(t.command);
+    if (Array.isArray(t.args)) cmd.push(...t.args);
+    if (cmd.length === 0) return null;
+    const env: Record<string, string> = {};
+    if (t.env && typeof t.env === 'object') {
+      for (const [k, v] of Object.entries(t.env)) {
+        if (typeof v === 'string') env[k] = v;
+      }
+    }
+    return { command: cmd, env: Object.keys(env).length > 0 ? env : undefined };
+  }
+  if (t.url) {
+    const headers: string[] = [];
+    if (t.http_headers && typeof t.http_headers === 'object') {
+      for (const [k, v] of Object.entries(t.http_headers)) {
+        headers.push(`${k}: ${v}`);
+      }
+    }
+    return {
+      url: t.url,
+      headers: headers.length > 0 ? headers : undefined,
+      bearerTokenEnvVar: t.bearer_token_env_var ?? undefined,
+    };
+  }
+  return null;
 }
 
 export class CodexMCPService {
+  private readonly activeOps = new Map<string, CodexMCPActiveOp>();
+
   constructor(private readonly deps: Deps) {}
+
+  private startOp(name: string, action: CodexMCPOpAction): void {
+    this.activeOps.set(name, { name, action, startedAt: Date.now() });
+  }
+
+  private endOp(name: string): void {
+    this.activeOps.delete(name);
+  }
 
   presetConfigPath(): string {
     return this.deps.paths.confPath('codex', 'mcp-presets.json');
@@ -26,7 +81,7 @@ export class CodexMCPService {
 
   async list(): Promise<Record<string, unknown>> {
     const presets = await this.loadPresets();
-    const installedNames = await this.listInstalledNames();
+    const { names: installedNames, configs: installedConfigs } = await this.listInstalled();
 
     const installedSet = new Set(installedNames);
     const supportedSet = new Set(presets.map((p) => p.name));
@@ -34,6 +89,7 @@ export class CodexMCPService {
     const supported: CodexMCPPresetStatus[] = presets.map((preset) => ({
       name: preset.name,
       description: preset.description,
+      install: preset.install,
       installed: installedSet.has(preset.name),
     }));
 
@@ -48,13 +104,20 @@ export class CodexMCPService {
       }
     }
 
+    const otherNames = installedNames.filter((n) => !supportedSet.has(n)).sort();
+    const otherConfigs: Record<string, CodexMCPPresetInstallConfig> = {};
+    for (const name of otherNames) {
+      const cfg = installedConfigs.get(name);
+      if (cfg) otherConfigs[name] = cfg;
+    }
+
     return {
       paths: { user: userPath, userExists },
       installed: { user: installedNames },
       supported,
-      others: {
-        user: installedNames.filter((n) => !supportedSet.has(n)).sort(),
-      },
+      others: { user: otherNames },
+      otherConfigs,
+      activeOps: Array.from(this.activeOps.values()),
     };
   }
 
@@ -66,41 +129,118 @@ export class CodexMCPService {
     const preset = presets.find((p) => p.name === name);
     if (!preset) throw new AppError('INVALID_INPUT', `unsupported preset mcp: ${name}`, 400);
 
-    const args = buildPresetInstallArgs(preset);
-    const r = await this.deps.runner.run('codex', args, { cwd: this.deps.paths.rootDir });
+    this.startOp(name, 'installing');
+    try {
+      const args = buildPresetInstallArgs(preset);
+      const r = await this.deps.runner.run('codex', args, { cwd: this.deps.paths.rootDir });
 
-    let ok = r.code === 0;
-    if (!ok && isAlreadyExists(r.stdout, r.stderr)) ok = true;
+      let ok = r.code === 0;
+      if (!ok && isAlreadyExists(r.stdout, r.stderr)) ok = true;
 
-    let error = ok ? '' : commandError(r.code, r.stdout, r.stderr);
+      let error = ok ? '' : commandError(r.code, r.stdout, r.stderr);
 
-    if (ok) {
-      try {
-        await this.applyPresetHTTPHeaders(name, preset.install);
-      } catch (err) {
-        ok = false;
-        error = (err as Error).message;
+      if (ok) {
+        try {
+          await this.applyPresetHTTPHeaders(name, preset.install);
+        } catch (err) {
+          ok = false;
+          error = (err as Error).message;
+        }
       }
-    }
 
-    return { name, stdout: r.stdout, stderr: r.stderr, ok, error };
+      return { name, stdout: r.stdout, stderr: r.stderr, ok, error };
+    } finally {
+      this.endOp(name);
+    }
   }
 
   async presetRemove(rawName: string): Promise<{ name: string; stdout: string; stderr: string; ok: boolean; error: string }> {
     const name = rawName.trim();
     if (name === '') throw new AppError('INVALID_INPUT', 'name is required', 400);
 
-    const r = await this.deps.runner.run('codex', ['mcp', 'remove', name], { cwd: this.deps.paths.rootDir });
-    let ok = r.code === 0;
-    if (!ok && isNotFound(r.stdout, r.stderr)) ok = true;
+    this.startOp(name, 'uninstalling');
+    try {
+      const r = await this.deps.runner.run('codex', ['mcp', 'remove', name], { cwd: this.deps.paths.rootDir });
+      let ok = r.code === 0;
+      if (!ok && isNotFound(r.stdout, r.stderr)) ok = true;
 
-    return {
+      return {
+        name,
+        stdout: r.stdout,
+        stderr: r.stderr,
+        ok,
+        error: ok ? '' : commandError(r.code, r.stdout, r.stderr),
+      };
+    } finally {
+      this.endOp(name);
+    }
+  }
+
+  // ── preset CRUD ──────────────────────────────────────────────────────────
+
+  async createPreset(req: CodexMCPPresetCreateRequest): Promise<void> {
+    const name = req.name.trim();
+    if (!name) throw new AppError('INVALID_INPUT', 'name is required', 400);
+    const presets = await this.loadPresets();
+    if (presets.some((p) => p.name === name)) {
+      throw new AppError('DUPLICATE_PRESET', `codex mcp preset already exists: ${name}`, 400);
+    }
+    const preset: CodexMCPPresetDefinition = {
       name,
-      stdout: r.stdout,
-      stderr: r.stderr,
-      ok,
-      error: ok ? '' : commandError(r.code, r.stdout, r.stderr),
+      description: (req.description ?? '').trim(),
+      install: buildInstallConfig(req),
     };
+    await this.savePresets([...presets, preset]);
+  }
+
+  async updatePreset(req: CodexMCPPresetUpdateRequest): Promise<{ reinstalled: boolean; reinstallError: string }> {
+    const name = req.name.trim();
+    if (!name) throw new AppError('INVALID_INPUT', 'name is required', 400);
+    const presets = await this.loadPresets();
+    const idx = presets.findIndex((p) => p.name === name);
+    if (idx === -1) throw new AppError('NOT_FOUND', `codex mcp preset not found: ${name}`, 404);
+    const updated: CodexMCPPresetDefinition = {
+      name,
+      description: (req.description ?? '').trim(),
+      install: buildInstallConfig(req),
+    };
+
+    const { names: installedNames } = await this.listInstalled();
+    const wasInstalled = installedNames.includes(name);
+
+    await this.savePresets(presets.map((p, i) => (i === idx ? updated : p)));
+
+    if (!wasInstalled) return { reinstalled: false, reinstallError: '' };
+
+    const removeR = await this.deps.runner.run('codex', ['mcp', 'remove', name], { cwd: this.deps.paths.rootDir });
+    if (removeR.code !== 0) {
+      return { reinstalled: false, reinstallError: `remove failed: ${commandError(removeR.code, removeR.stdout, removeR.stderr)}` };
+    }
+
+    const installArgs = buildPresetInstallArgs(updated);
+    const installR = await this.deps.runner.run('codex', installArgs, { cwd: this.deps.paths.rootDir });
+    const ok = installR.code === 0;
+    return {
+      reinstalled: ok,
+      reinstallError: ok ? '' : `install failed: ${commandError(installR.code, installR.stdout, installR.stderr)}`,
+    };
+  }
+
+  async deletePreset(name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (!trimmed) throw new AppError('INVALID_INPUT', 'name is required', 400);
+    const presets = await this.loadPresets();
+    const next = presets.filter((p) => p.name !== trimmed);
+    if (next.length === presets.length) {
+      throw new AppError('NOT_FOUND', `codex mcp preset not found: ${trimmed}`, 404);
+    }
+    await this.savePresets(next);
+  }
+
+  private async savePresets(presets: CodexMCPPresetDefinition[]): Promise<void> {
+    const p = this.presetConfigPath();
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, JSON.stringify(presets, null, 2));
   }
 
   async loadPresets(): Promise<CodexMCPPresetDefinition[]> {
@@ -147,6 +287,11 @@ export class CodexMCPService {
   }
 
   async listInstalledNames(): Promise<string[]> {
+    const { names } = await this.listInstalled();
+    return names;
+  }
+
+  async listInstalled(): Promise<{ names: string[]; configs: Map<string, CodexMCPPresetInstallConfig> }> {
     const r = await this.deps.runner.run('codex', ['mcp', 'list', '--json'], { cwd: this.deps.paths.rootDir });
     if (r.code !== 0) {
       throw new AppError('CODEX_MCP_LIST_FAILED', `failed to run codex mcp list: ${commandError(r.code, r.stdout, r.stderr)}`, 500);
@@ -157,14 +302,18 @@ export class CodexMCPService {
     } catch (err) {
       throw new AppError('CODEX_MCP_LIST_PARSE_FAILED', `invalid JSON from codex mcp list: ${(err as Error).message}`, 500);
     }
-    if (!Array.isArray(items)) return [];
+    if (!Array.isArray(items)) return { names: [], configs: new Map() };
     const names: string[] = [];
+    const configs = new Map<string, CodexMCPPresetInstallConfig>();
     for (const item of items) {
       const name = (item?.name ?? '').trim();
-      if (name !== '') names.push(name);
+      if (name === '') continue;
+      names.push(name);
+      const cfg = listItemToInstallConfig(item);
+      if (cfg) configs.set(name, cfg);
     }
     names.sort();
-    return names;
+    return { names, configs };
   }
 
   private async applyPresetHTTPHeaders(name: string, install: CodexMCPPresetInstallConfig): Promise<void> {
@@ -253,4 +402,22 @@ function commandError(code: number, stdout: string, stderr: string): string {
   if (trimmedStderr !== '') return `${message}\nstderr: ${trimmedStderr}`;
   if (trimmedStdout !== '') return `${message}\nstdout: ${trimmedStdout}`;
   return message;
+}
+
+function buildInstallConfig(
+  req: { installType: 'http' | 'stdio'; url?: string; headers?: string[]; bearerTokenEnvVar?: string; command?: string[]; env?: Record<string, string> },
+): CodexMCPPresetInstallConfig {
+  if (req.installType === 'stdio') {
+    const cmd = (req.command ?? []).filter((c) => c.trim() !== '');
+    const env = req.env && Object.keys(req.env).length > 0 ? req.env : undefined;
+    return { command: cmd, ...(env ? { env } : {}) };
+  }
+  const url = (req.url ?? '').trim();
+  const headers = (req.headers ?? []).filter((h) => h.trim() !== '');
+  const token = (req.bearerTokenEnvVar ?? '').trim();
+  return {
+    url,
+    ...(headers.length > 0 ? { headers } : {}),
+    ...(token ? { bearerTokenEnvVar: token } : {}),
+  };
 }

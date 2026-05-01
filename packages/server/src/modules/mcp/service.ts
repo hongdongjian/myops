@@ -1,14 +1,13 @@
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
 import os from 'node:os';
 import type { Deps } from '../../deps.js';
 import { AppError } from '../../core/errors.js';
-import { copyDir } from '../../core/fsops/index.js';
 import type { ProcessStatus } from './schema.js';
 
 export const XHS_PROCESS_NAME = 'xiaohongshu-mcp';
-export const XHS_MCP_INITIALIZE_URL = 'http://localhost:18060/mcp';
 export const XHS_MCP_PROBE_TIMEOUT_MS = 3000;
 export const XHS_MCP_PROBE_CACHE_TTL_MS = 10_000;
 
@@ -22,12 +21,22 @@ interface ProbeCache {
   error: string;
 }
 
+interface BinaryConfigSettings {
+  loginBinaryPath: string;
+  serverBinaryPath: string;
+}
+
 export class XHSService {
   private autostartEnabled: boolean;
   private probeCache: ProbeCache | null = null;
+  private loginBinaryPathOverride = '';
+  private serverBinaryPathOverride = '';
 
   constructor(private readonly deps: Deps) {
     this.autostartEnabled = this.loadAutostartSetting();
+    const cfg = this.loadBinaryConfigSync();
+    this.loginBinaryPathOverride = cfg.loginBinaryPath;
+    this.serverBinaryPathOverride = cfg.serverBinaryPath;
   }
 
   // ── paths ────────────────────────────────────────────────────────────────
@@ -40,20 +49,24 @@ export class XHSService {
     return `${process.platform === 'darwin' ? 'darwin' : process.platform}-${mapArch(process.arch)}`;
   }
 
-  loginBinaryPath(): string {
+  defaultLoginBinaryPath(): string {
     return path.join(this.packagePath(), `xiaohongshu-login-${this.binarySuffix()}`);
   }
 
-  serverBinaryPath(): string {
+  defaultServerBinaryPath(): string {
     return path.join(this.packagePath(), `xiaohongshu-mcp-${this.binarySuffix()}`);
+  }
+
+  loginBinaryPath(): string {
+    return this.loginBinaryPathOverride;
+  }
+
+  serverBinaryPath(): string {
+    return this.serverBinaryPathOverride;
   }
 
   xhsDataPath(...parts: string[]): string {
     return this.deps.paths.dataPath('xhs', ...parts);
-  }
-
-  defaultPackageSource(): string {
-    return path.join(this.deps.paths.rootDir, 'packages', 'xhs');
   }
 
   logPath(): string {
@@ -62,6 +75,35 @@ export class XHSService {
 
   autostartSettingsPath(): string {
     return this.deps.paths.dataPath('xhs-autostart.json');
+  }
+
+  binaryConfigPath(): string {
+    return this.deps.paths.dataPath('xhs-binary-config.json');
+  }
+
+  getBinaryConfig(): { loginBinaryPath: string; serverBinaryPath: string } {
+    return {
+      loginBinaryPath: this.loginBinaryPathOverride,
+      serverBinaryPath: this.serverBinaryPathOverride,
+    };
+  }
+
+  async saveBinaryConfig(loginBinaryPath: string, serverBinaryPath: string): Promise<void> {
+    this.loginBinaryPathOverride = loginBinaryPath.trim();
+    this.serverBinaryPathOverride = serverBinaryPath.trim();
+    const p = this.binaryConfigPath();
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, JSON.stringify({ loginBinaryPath: this.loginBinaryPathOverride, serverBinaryPath: this.serverBinaryPathOverride } satisfies BinaryConfigSettings));
+  }
+
+  private loadBinaryConfigSync(): BinaryConfigSettings {
+    try {
+      const raw = fsSync.readFileSync(this.binaryConfigPath(), 'utf-8');
+      const parsed = JSON.parse(raw) as Partial<BinaryConfigSettings>;
+      return { loginBinaryPath: parsed.loginBinaryPath ?? '', serverBinaryPath: parsed.serverBinaryPath ?? '' };
+    } catch {
+      return { loginBinaryPath: '', serverBinaryPath: '' };
+    }
   }
 
   // ── status / lifecycle ───────────────────────────────────────────────────
@@ -128,6 +170,9 @@ export class XHSService {
   }
 
   async start(): Promise<ProcessStatus> {
+    if (!this.serverBinaryPathOverride) {
+      throw new AppError('XHS_NOT_CONFIGURED', 'server binary path not configured', 400);
+    }
     if (!fileExists(this.serverBinaryPath())) {
       throw new AppError('XHS_NOT_INSTALLED', `xiaohongshu mcp binary not found: ${this.serverBinaryPath()}`, 400);
     }
@@ -155,6 +200,9 @@ export class XHSService {
   }
 
   async restart(): Promise<ProcessStatus> {
+    if (!this.serverBinaryPathOverride) {
+      throw new AppError('XHS_NOT_CONFIGURED', 'server binary path not configured', 400);
+    }
     if (!fileExists(this.serverBinaryPath())) {
       throw new AppError('XHS_NOT_INSTALLED', `xiaohongshu mcp binary not found: ${this.serverBinaryPath()}`, 400);
     }
@@ -169,6 +217,9 @@ export class XHSService {
   // ── login ────────────────────────────────────────────────────────────────
 
   async login(): Promise<{ stdout: string; stderr: string; removedCookies: string[]; ok: boolean; error: string }> {
+    if (!this.loginBinaryPathOverride) {
+      throw new AppError('XHS_NOT_CONFIGURED', 'login binary path not configured', 400);
+    }
     if (!fileExists(this.loginBinaryPath())) {
       throw new AppError('XHS_LOGIN_BINARY_MISSING', `xiaohongshu login binary not found: ${this.loginBinaryPath()}`, 400);
     }
@@ -213,40 +264,6 @@ export class XHSService {
     this.appendEventLog('LOG_CLEAR', 'xiaohongshu mcp logs cleared');
   }
 
-  // ── package copy ─────────────────────────────────────────────────────────
-
-  async copyPackage(sourcePath: string | undefined): Promise<{ sourcePath: string; targetPath: string }> {
-    const src = sourcePath && sourcePath.trim() !== '' ? sourcePath : this.defaultPackageSource();
-    let info: fsSync.Stats;
-    try {
-      info = fsSync.statSync(src);
-    } catch (err) {
-      throw new AppError('INVALID_INPUT', `invalid source path: ${(err as Error).message}`, 400);
-    }
-    if (!info.isDirectory()) {
-      throw new AppError('INVALID_INPUT', 'source path must be a directory', 400);
-    }
-    const target = this.packagePath();
-    await fs.rm(target, { recursive: true, force: true });
-    copyDir(src, target);
-    return { sourcePath: src, targetPath: target };
-  }
-
-  // ── claude register ──────────────────────────────────────────────────────
-
-  async registerToClaude(): Promise<{ stdout: string; stderr: string; ok: boolean; error: string }> {
-    const r = await this.deps.runner.run('claude', [
-      'mcp', 'add', 'xiaohongshu-mcp', '--transport', 'http', 'http://localhost:18060/mcp',
-    ]);
-    const ok = r.code === 0;
-    return {
-      stdout: r.stdout,
-      stderr: r.stderr,
-      ok,
-      error: ok ? '' : (r.stderr.trim() || `exit ${r.code}`),
-    };
-  }
-
   // ── autostart ────────────────────────────────────────────────────────────
 
   getAutostart(): { enabled: boolean } {
@@ -266,6 +283,8 @@ export class XHSService {
   }
 
   async autostartCheck(): Promise<void> {
+    if (!this.autostartEnabled) return;
+    if (!this.serverBinaryPathOverride) return;
     if (!fileExists(this.serverBinaryPath())) return;
     const status = this.deps.processMgr.status(XHS_PROCESS_NAME);
     if (status.running) return;
@@ -340,26 +359,9 @@ export class XHSService {
     if (this.probeCache && Date.now() - this.probeCache.checkedAt < XHS_MCP_PROBE_CACHE_TTL_MS) {
       return { healthy: this.probeCache.healthy, error: this.probeCache.error };
     }
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), XHS_MCP_PROBE_TIMEOUT_MS);
-    let healthy = false;
-    let error = '';
-    try {
-      const res = await fetch(XHS_MCP_INITIALIZE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', params: {}, id: 1 }),
-        signal: ctrl.signal,
-      });
-      healthy = res.ok;
-      if (!healthy) error = `mcp endpoint returned ${res.status}`;
-    } catch (err) {
-      error = (err as Error).message;
-    } finally {
-      clearTimeout(timer);
-    }
-    this.probeCache = { checkedAt: Date.now(), healthy, error };
-    return { healthy, error };
+    const result = await checkTcpPort(18060, XHS_MCP_PROBE_TIMEOUT_MS);
+    this.probeCache = { checkedAt: Date.now(), healthy: result.healthy, error: result.error };
+    return result;
   }
 
   // ── log helpers ──────────────────────────────────────────────────────────
@@ -409,6 +411,26 @@ export function parseLinesParameter(value: string | undefined, def: number, max:
   if (Number.isNaN(parsed) || parsed <= 0) return def;
   if (parsed > max) return max;
   return parsed;
+}
+
+function checkTcpPort(port: number, timeoutMs: number): Promise<{ healthy: boolean; error: string }> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let resolved = false;
+
+    const done = (healthy: boolean, error: string) => {
+      if (resolved) return;
+      resolved = true;
+      socket.destroy();
+      resolve({ healthy, error });
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true, ''));
+    socket.once('timeout', () => done(false, 'connection timed out'));
+    socket.once('error', (err) => done(false, err.message));
+    socket.connect(port, '127.0.0.1');
+  });
 }
 
 // re-export for test convenience

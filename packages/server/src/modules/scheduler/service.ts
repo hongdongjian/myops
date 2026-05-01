@@ -1,22 +1,16 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { Mutex } from 'async-mutex';
 import type { Deps } from '../../deps.js';
 import { AppError } from '../../core/errors.js';
 import type { ScheduledTask, TaskExecution } from './schema.js';
 
-export const SCHEDULER_TICK_MS = 30 * 1000;
+export const SCHEDULER_TICK_MS = 3 * 1000;
 
 function nowID(): string {
   return `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
-}
-
-function dateOnly(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
 }
 
 function parseScheduleTime(scheduleTime: string, base: Date): Date {
@@ -29,24 +23,46 @@ function parseScheduleTime(scheduleTime: string, base: Date): Date {
 }
 
 export function recalcNextRun(task: ScheduledTask, now: Date = new Date()): void {
-  if (!task.scheduleTime) {
-    delete task.nextRunAt;
-    return;
+  switch (task.scheduleType) {
+    case 'once': {
+      if (task.runAt) {
+        const t = new Date(task.runAt);
+        task.nextRunAt = t.getTime() > now.getTime() ? task.runAt : undefined;
+      } else {
+        task.nextRunAt = undefined;
+      }
+      break;
+    }
+    case 'interval': {
+      const secs = task.intervalSeconds ?? 60;
+      task.nextRunAt = new Date(now.getTime() + secs * 1000).toISOString();
+      break;
+    }
+    case 'periodic': {
+      if (!task.scheduleTime) {
+        task.nextRunAt = undefined;
+        return;
+      }
+      const intervalMs = (task.intervalDays ?? 1) * 24 * 60 * 60 * 1000;
+      const todayAt = parseScheduleTime(task.scheduleTime, now);
+      let next: Date;
+      if (todayAt.getTime() > now.getTime()) {
+        next = todayAt;
+      } else {
+        next = new Date(todayAt.getTime() + intervalMs);
+        while (next.getTime() <= now.getTime()) {
+          next = new Date(next.getTime() + intervalMs);
+        }
+      }
+      const delaySecs = task.randomDelaySeconds ?? 0;
+      if (delaySecs > 0) {
+        const min = delaySecs / 2;
+        next = new Date(next.getTime() + Math.floor(min + Math.random() * (delaySecs - min + 1)) * 1000);
+      }
+      task.nextRunAt = next.toISOString();
+      break;
+    }
   }
-  const todayRun = parseScheduleTime(task.scheduleTime, now);
-  let next: Date;
-  if (todayRun.getTime() > now.getTime()) {
-    next = todayRun;
-  } else {
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    next = parseScheduleTime(task.scheduleTime, tomorrow);
-  }
-  if (task.randomDelay && task.randomDelayMax > 0) {
-    const delay = Math.floor(Math.random() * (task.randomDelayMax + 1));
-    next = new Date(next.getTime() + delay * 60 * 1000);
-  }
-  task.nextRunAt = next.toISOString();
 }
 
 export class SchedulerService {
@@ -66,18 +82,10 @@ export class SchedulerService {
     await fsp.mkdir(path.join(this.dataDir, 'history'), { recursive: true });
     await this.loadTasks();
     const now = new Date();
-    const today = dateOnly(now);
     for (const task of this.tasks) {
       if (task.enabled) {
         task.status = 'scheduled';
         recalcNextRun(task, now);
-        if (task.mustSucceedDaily && task.lastSuccessDate !== today) {
-          const scheduledToday = parseScheduleTime(task.scheduleTime, now);
-          if (scheduledToday.getTime() <= now.getTime()) {
-            const catchUp = new Date(now.getTime() + 10 * 1000);
-            task.nextRunAt = catchUp.toISOString();
-          }
-        }
       } else {
         task.status = 'stopped';
       }
@@ -111,7 +119,9 @@ export class SchedulerService {
     return t ? { ...t } : undefined;
   }
 
-  async createTask(input: Omit<ScheduledTask, 'id' | 'status' | 'nextRunAt' | 'lastRunAt' | 'lastSuccessDate'>): Promise<ScheduledTask> {
+  async createTask(
+    input: Omit<ScheduledTask, 'id' | 'status' | 'nextRunAt' | 'lastRunAt'>,
+  ): Promise<ScheduledTask> {
     const task: ScheduledTask = { ...input, id: nowID(), status: 'stopped' };
     if (task.enabled) {
       task.status = 'scheduled';
@@ -134,7 +144,7 @@ export class SchedulerService {
       recalcNextRun(next);
     } else {
       next.status = 'stopped';
-      delete next.nextRunAt;
+      next.nextRunAt = undefined;
     }
     this.tasks = this.tasks.map((t, i) => (i === idx ? next : t));
     await this.persistTasks();
@@ -152,7 +162,7 @@ export class SchedulerService {
     const next = { ...this.tasks[idx]!, enabled };
     if (!enabled) {
       next.status = 'stopped';
-      delete next.nextRunAt;
+      next.nextRunAt = undefined;
     } else if (!this.running.has(id)) {
       next.status = 'scheduled';
       recalcNextRun(next);
@@ -188,11 +198,9 @@ export class SchedulerService {
 
   async tick(): Promise<void> {
     const now = new Date();
-    const today = dateOnly(now);
     const due: string[] = [];
     for (const task of this.tasks) {
       if (!task.enabled || this.running.has(task.id)) continue;
-      if (task.lastSuccessDate === today) continue;
       if (task.nextRunAt && now.getTime() > new Date(task.nextRunAt).getTime()) {
         due.push(task.id);
       }
@@ -202,17 +210,17 @@ export class SchedulerService {
 
   private async runTask(taskID: string): Promise<void> {
     const release = await this.mu.acquire();
-    let prompt = '';
-    let model = '';
+    let command = '';
     let taskName = '';
+    let scheduleType: ScheduledTask['scheduleType'] = 'periodic';
     try {
       const task = this.tasks.find((t) => t.id === taskID);
       if (!task || this.running.has(taskID)) return;
       this.running.add(taskID);
       task.status = 'running';
-      prompt = task.prompt;
-      model = task.model;
+      command = task.command;
       taskName = task.name;
+      scheduleType = task.scheduleType;
     } finally {
       release();
     }
@@ -234,30 +242,27 @@ export class SchedulerService {
     };
     await this.appendExecution(taskID, exec);
 
-    const args = ['--dangerously-skip-permissions', '-p', `"${prompt}"`];
-    if (model) args.push('--model', model);
+    const logStream = fs.createWriteStream(logFile, { flags: 'w' });
+    logStream.write(`=== Task: ${taskName} ===\n=== Start: ${startTime.toISOString()} ===\n\nSTDOUT:\n`);
 
     let runErr: string | null = null;
-    let stdout = '';
-    let stderr = '';
     try {
-      const result = await this.deps.runner.run('claude', args, { stripClaudeCode: true });
-      stdout = result.stdout;
-      stderr = result.stderr;
-      if (result.code !== 0) {
-        runErr = stderr.trim() || `exit ${result.code}`;
+      const { code, stderr } = await new Promise<{ code: number; stderr: string }>((resolve) => {
+        const child = spawn('sh', ['-c', command], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stderrStr = '';
+        child.stdout.on('data', (chunk: Buffer) => { logStream.write(chunk); });
+        child.stderr.on('data', (chunk: Buffer) => { stderrStr += chunk.toString(); });
+        child.on('close', (exitCode) => resolve({ code: exitCode ?? -1, stderr: stderrStr }));
+      });
+      logStream.write(`\n\nSTDERR:\n${stderr}`);
+      if (code !== 0) {
+        runErr = stderr.trim() || `exit ${code}`;
       }
     } catch (err) {
       runErr = (err as Error).message;
-    }
-
-    const logContent =
-      `=== Task: ${taskName} ===\n=== Start: ${startTime.toISOString()} ===\n\n` +
-      `STDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`;
-    try {
-      await fsp.writeFile(logFile, logContent);
-    } catch {
-      /* swallow */
+      logStream.write(`\n\nERROR:\n${runErr}`);
+    } finally {
+      await new Promise<void>((r) => logStream.end(r));
     }
 
     const endTime = new Date();
@@ -275,15 +280,29 @@ export class SchedulerService {
       const task = this.tasks.find((t) => t.id === taskID);
       if (task) {
         task.lastRunAt = endTime.toISOString();
-        if (finished.success) task.lastSuccessDate = dateOnly(endTime);
         this.running.delete(taskID);
-        if (task.enabled) {
+        if (scheduleType === 'once') {
+          task.enabled = false;
+          task.status = 'stopped';
+          task.nextRunAt = undefined;
+          task.retryAttempts = 0;
+        } else if (task.enabled) {
           task.status = 'scheduled';
-          if (task.mustSucceedDaily && !finished.success && this.todayHasTime(task)) {
-            const retry = new Date(endTime.getTime() + 30 * 60 * 1000);
-            task.nextRunAt = retry.toISOString();
+          const maxRetries = task.retryCount ?? 1;
+          const currentAttempts = task.retryAttempts ?? 0;
+          if (runErr !== null && currentAttempts < maxRetries) {
+            task.retryAttempts = currentAttempts + 1;
+            const intervalSecs = task.retryIntervalSeconds ?? 0;
+            if (intervalSecs > 0) {
+              const min = intervalSecs / 2;
+              const delay = Math.floor(min + Math.random() * (intervalSecs - min + 1));
+              task.nextRunAt = new Date(endTime.getTime() + delay * 1000).toISOString();
+            } else {
+              task.nextRunAt = new Date(endTime.getTime() + 1000).toISOString();
+            }
           } else {
-            recalcNextRun(task);
+            task.retryAttempts = 0;
+            recalcNextRun(task, endTime);
           }
         } else {
           task.status = 'stopped';
@@ -293,15 +312,6 @@ export class SchedulerService {
       release2();
     }
     await this.persistTasks();
-  }
-
-  private todayHasTime(task: ScheduledTask): boolean {
-    if (!task.scheduleTime) return false;
-    const now = new Date();
-    const scheduledToday = parseScheduleTime(task.scheduleTime, now);
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 0);
-    return now.getTime() + 35 * 60 * 1000 < endOfDay.getTime() && scheduledToday < endOfDay;
   }
 
   // ── persistence ──────────────────────────────────────────────────────────
@@ -350,7 +360,7 @@ export class SchedulerService {
     } else {
       history = [...history, exec];
     }
-    if (history.length > 100) history = history.slice(history.length - 100);
+    if (history.length > 500) history = history.slice(history.length - 500);
     await fsp.mkdir(path.dirname(this.historyFile(taskID)), { recursive: true });
     await fsp.writeFile(this.historyFile(taskID), JSON.stringify(history, null, 2));
   }

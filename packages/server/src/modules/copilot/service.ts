@@ -17,7 +17,7 @@ import type { CopilotAuthSnapshot } from '../copilot-accounts/schema.js';
 export const COPILOT_PROCESS_NAME = 'copilot-api';
 export const COPILOT_SOURCE_URL = 'https://github.com/caozhiyuan/copilot-api/tree/all';
 export const COPILOT_PACKAGE_NAME = '@jeffreycao/copilot-api';
-export const COPILOT_USAGE_API_URL = 'http://localhost:4141/usage';
+export const COPILOT_DEFAULT_PORT = 4141;
 export const COPILOT_USAGE_TIMEOUT_MS = 4000;
 
 const COPILOT_VERSION_CACHE_TTL_SECONDS = 5 * 60;
@@ -36,21 +36,33 @@ interface ProxySettings {
   enabled: boolean;
 }
 
+function isSubset(template: Record<string, unknown>, actual: Record<string, unknown>): boolean {
+  return Object.entries(template).every(([k, v]) => {
+    if (!(k in actual)) return false;
+    const av = actual[k];
+    if (v !== null && typeof v === 'object' && !Array.isArray(v) && av !== null && typeof av === 'object' && !Array.isArray(av)) {
+      return isSubset(v as Record<string, unknown>, av as Record<string, unknown>);
+    }
+    return JSON.stringify(av) === JSON.stringify(v);
+  });
+}
+
 export interface CopilotState {
   autostartEnabled: boolean;
   proxyEnabled: boolean;
-  proxyUrl: string;
+  port: number;
 }
 
 export class CopilotService {
   private autostartEnabled: boolean;
   private proxyEnabled: boolean;
-  private readonly proxyUrl: string;
+  private port: number;
 
   constructor(private readonly deps: Deps) {
-    this.proxyUrl = deps.config.copilot_proxy_url ?? '';
+    const proxy = this.loadProxySettings();
+    this.proxyEnabled = proxy.enabled;
+    this.port = this.loadPortSettings();
     this.autostartEnabled = this.loadAutostartSetting();
-    this.proxyEnabled = this.loadProxySetting();
   }
 
   // ── paths ────────────────────────────────────────────────────────────────
@@ -73,6 +85,10 @@ export class CopilotService {
 
   proxySettingsPath(): string {
     return this.deps.paths.dataPath('copilot-proxy.json');
+  }
+
+  portSettingsPath(): string {
+    return this.deps.paths.dataPath('copilot-port.json');
   }
 
   // ── status / lifecycle ───────────────────────────────────────────────────
@@ -161,18 +177,13 @@ export class CopilotService {
 
   startArgs(): string[] {
     const args = ['start'];
+    if (this.port !== COPILOT_DEFAULT_PORT) args.push('--port', String(this.port));
     if (this.proxyEnabled) args.push('--proxy-env');
     return args;
   }
 
-  startEnv(): Record<string, string> | null {
-    if (!this.proxyEnabled || this.proxyUrl === '') return null;
-    return {
-      HTTP_PROXY: this.proxyUrl,
-      HTTPS_PROXY: this.proxyUrl,
-      http_proxy: this.proxyUrl,
-      https_proxy: this.proxyUrl,
-    };
+  startEnv(): null {
+    return null;
   }
 
   // ── upgrade / install ────────────────────────────────────────────────────
@@ -248,11 +259,12 @@ export class CopilotService {
   // ── usage ────────────────────────────────────────────────────────────────
 
   async fetchUsage(): Promise<UsageStatus> {
+    const usageUrl = `http://localhost:${this.port}/usage`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), COPILOT_USAGE_TIMEOUT_MS);
     let res: Response;
     try {
-      res = await fetch(COPILOT_USAGE_API_URL, { signal: ctrl.signal });
+      res = await fetch(usageUrl, { signal: ctrl.signal });
     } finally {
       clearTimeout(timer);
     }
@@ -284,6 +296,27 @@ export class CopilotService {
       unlimited: snapshot.unlimited,
       resetDate: payload.quota_reset_date ?? '',
     };
+  }
+
+  async fetchModels(): Promise<unknown[]> {
+    const url = `http://localhost:${this.port}/models`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), COPILOT_USAGE_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(url, { signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      throw new AppError('COPILOT_MODELS_FAILED', `models endpoint returned ${res.status}`, 502);
+    }
+    const payload = (await res.json()) as unknown;
+    if (Array.isArray(payload)) return payload as unknown[];
+    if (payload && typeof payload === 'object' && 'data' in payload && Array.isArray((payload as Record<string, unknown>).data)) {
+      return (payload as Record<string, unknown[]>).data ?? [];
+    }
+    return [];
   }
 
   // ── config ───────────────────────────────────────────────────────────────
@@ -325,10 +358,16 @@ export class CopilotService {
     try {
       actual = await fs.readFile(this.actualConfigPath(), 'utf-8');
     } catch { /* missing */ }
-    return {
-      synced: local !== null && actual !== null && local === actual,
-      localExists: local !== null,
-    };
+    if (local === null) return { synced: false, localExists: false };
+    if (actual === null) return { synced: false, localExists: true };
+    try {
+      const localObj = JSON.parse(local) as Record<string, unknown>;
+      const actualObj = JSON.parse(actual) as Record<string, unknown>;
+      const synced = isSubset(localObj, actualObj);
+      return { synced, localExists: true };
+    } catch {
+      return { synced: local === actual, localExists: true };
+    }
   }
 
   async configSync(): Promise<void> {
@@ -393,13 +432,35 @@ export class CopilotService {
 
   // ── proxy ────────────────────────────────────────────────────────────────
 
-  getProxy(): { enabled: boolean; proxyURL: string } {
-    return { enabled: this.proxyEnabled, proxyURL: this.proxyUrl };
+  getProxy(): { enabled: boolean } {
+    return { enabled: this.proxyEnabled };
   }
 
-  async setProxy(enabled: boolean): Promise<{ enabled: boolean; proxyURL: string; restarted: boolean }> {
+  getPort(): { port: number } {
+    return { port: this.port };
+  }
+
+  async setPort(port: number): Promise<{ port: number; restarted: boolean }> {
+    this.port = port;
+    await this.persistPort(port);
+    let restarted = false;
+    const status = this.deps.processMgr.status(COPILOT_PROCESS_NAME);
+    if (status.running) {
+      this.appendEventLog('PORT_RESTART', `port changed to ${port}, restarting`);
+      try {
+        await this.deps.processMgr.stop(COPILOT_PROCESS_NAME);
+        await this.startProcess();
+        restarted = true;
+      } catch (err) {
+        this.appendEventLog('PORT_RESTART_ERROR', (err as Error).message);
+      }
+    }
+    return { port: this.port, restarted };
+  }
+
+  async setProxy(enabled: boolean): Promise<{ enabled: boolean; restarted: boolean }> {
     this.proxyEnabled = enabled;
-    await this.persistProxy(enabled);
+    await this.persistProxy(this.proxyEnabled);
     let restarted = false;
     const status = this.deps.processMgr.status(COPILOT_PROCESS_NAME);
     if (status.running) {
@@ -412,16 +473,16 @@ export class CopilotService {
         this.appendEventLog('PROXY_RESTART_ERROR', (err as Error).message);
       }
     }
-    return { enabled, proxyURL: this.proxyUrl, restarted };
+    return { enabled: this.proxyEnabled, restarted };
   }
 
-  private loadProxySetting(): boolean {
+  private loadProxySettings(): { enabled: boolean } {
     try {
       const raw = fsSync.readFileSync(this.proxySettingsPath(), 'utf-8');
       const parsed = JSON.parse(raw) as ProxySettings;
-      return Boolean(parsed.enabled);
+      return { enabled: Boolean(parsed.enabled) };
     } catch {
-      return false;
+      return { enabled: false };
     }
   }
 
@@ -429,6 +490,23 @@ export class CopilotService {
     const p = this.proxySettingsPath();
     await fs.mkdir(path.dirname(p), { recursive: true });
     await fs.writeFile(p, JSON.stringify({ enabled }));
+  }
+
+  private loadPortSettings(): number {
+    try {
+      const raw = fsSync.readFileSync(this.portSettingsPath(), 'utf-8');
+      const parsed = JSON.parse(raw) as { port?: unknown };
+      const n = Number(parsed.port);
+      return Number.isInteger(n) && n > 0 ? n : COPILOT_DEFAULT_PORT;
+    } catch {
+      return COPILOT_DEFAULT_PORT;
+    }
+  }
+
+  private async persistPort(port: number): Promise<void> {
+    const p = this.portSettingsPath();
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, JSON.stringify({ port }));
   }
 
   // ── version ──────────────────────────────────────────────────────────────

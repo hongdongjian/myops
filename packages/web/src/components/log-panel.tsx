@@ -1,7 +1,7 @@
+import { useEffect, useRef } from 'react';
 import { useStatusPolling } from '@/lib/use-status-polling';
 import { apiPost } from '@/lib/api';
 import { Button } from './ui/button';
-import { ScrollArea } from './ui/scroll-area';
 
 export interface LogPanelProps {
   path: string;
@@ -26,9 +26,16 @@ function extractText(data: unknown): string {
   return '';
 }
 
-export function LogPanel({ path, intervalMs = 3000, height = '400px', clearPath }: LogPanelProps) {
+export function LogPanel({ path, intervalMs = 3000, height = '420px', clearPath }: LogPanelProps) {
   const { data, refetch, isLoading, error } = useStatusPolling<unknown>(['log', path], path, intervalMs);
   const text = extractText(data);
+  const lineCount = text ? text.split('\n').length : 0;
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [text]);
 
   const handleClear = async () => {
     if (!clearPath) return;
@@ -41,18 +48,44 @@ export function LogPanel({ path, intervalMs = 3000, height = '400px', clearPath 
   };
 
   return (
-    <div className="space-y-2">
-      <div className="flex justify-end gap-2">
-        <Button size="sm" variant="outline" onClick={() => refetch()}>刷新</Button>
-        {clearPath ? (
-          <Button size="sm" variant="outline" onClick={handleClear}>清空</Button>
-        ) : null}
+    <div className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
+      {/* Terminal chrome */}
+      <div className="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-1.5">
+        <div className="flex items-center gap-2">
+          <span className="flex gap-1">
+            <span className="h-2.5 w-2.5 rounded-full bg-destructive/60" />
+            <span className="h-2.5 w-2.5 rounded-full bg-warning/60" />
+            <span className="h-2.5 w-2.5 rounded-full bg-success/60" />
+          </span>
+          <span className="ml-2 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+            stdout · {lineCount} line{lineCount === 1 ? '' : 's'}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant="ghost" onClick={() => refetch()}>
+            Refresh
+          </Button>
+          {clearPath ? (
+            <Button size="sm" variant="ghost" onClick={handleClear}>
+              Clear
+            </Button>
+          ) : null}
+        </div>
       </div>
-      <ScrollArea className="rounded-md border border-border bg-muted/30" style={{ height }}>
-        <pre className="p-3 font-mono text-xs whitespace-pre-wrap break-words">
-          {error ? `加载失败: ${(error as Error).message}` : isLoading && !text ? '加载中...' : text || '(空)'}
+
+      <div ref={scrollRef} className="scanlines bg-muted/20 overflow-y-auto" style={{ height }}>
+        <pre className="px-4 py-3 font-mono text-[12px] leading-[1.55] text-foreground whitespace-pre-wrap break-words">
+          {error ? (
+            <span className="text-destructive">Load failed: {(error as Error).message}</span>
+          ) : isLoading && !text ? (
+            <span className="text-muted-foreground">Loading<span className="caret" /></span>
+          ) : text ? (
+            text
+          ) : (
+            <span className="text-muted-foreground">(empty)<span className="caret" /></span>
+          )}
         </pre>
-      </ScrollArea>
+      </div>
     </div>
   );
 }

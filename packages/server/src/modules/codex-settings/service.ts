@@ -42,6 +42,13 @@ export class CodexSettingsService {
     return content.split('~/.codex/notify.py').join(this.notifyHomePath());
   }
 
+  private toDisplayPath(p: string): string {
+    const home = this.deps.paths.homeDir;
+    if (p === home) return '~';
+    if (p.startsWith(home + path.sep)) return '~' + p.slice(home.length);
+    return p;
+  }
+
   async syncNotifyScript(): Promise<void> {
     let source: Buffer;
     try {
@@ -167,6 +174,27 @@ export class CodexSettingsService {
     }
   }
 
+  async applyCustomProvider(input: { baseUrl: string; apiKey: string; model: string }): Promise<void> {
+    await this.setAuthMode({ enabled: false, baseUrl: input.baseUrl, apiKey: input.apiKey });
+    if (input.model.trim()) {
+      const p = this.configPath();
+      const { content } = await readTextFile(p);
+      const updated = setTomlStringValue(content, '', 'model', input.model.trim(), true).content;
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      await fs.writeFile(p, updated);
+    }
+  }
+
+  async setModel(model: string): Promise<void> {
+    const trimmed = model.trim();
+    if (!trimmed) return;
+    const p = this.configPath();
+    const { content } = await readTextFile(p);
+    const updated = setTomlStringValue(content, '', 'model', trimmed, true).content;
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, updated);
+  }
+
   async getTemplate(): Promise<{ content: string; path: string; exists: boolean }> {
     const tplPath = this.templatePath();
     let data: string;
@@ -174,48 +202,29 @@ export class CodexSettingsService {
       data = await fs.readFile(tplPath, 'utf-8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { content: '', path: tplPath, exists: false };
+        return { content: '', path: this.toDisplayPath(tplPath), exists: false };
       }
       throw err;
     }
     let content = data;
-    const home = await readTextFile(this.configPath());
-    if (home.exists) {
-      content = mergeCodexRootLevelFromHome(content, home.content);
-    }
-    return { content, path: tplPath, exists: true };
+    return { content, path: this.toDisplayPath(tplPath), exists: true };
   }
 
   async saveTemplate(rawContent: string): Promise<void> {
-    let templateContent = rawContent;
-    const home = await readTextFile(this.configPath());
-    if (home.exists) {
-      const homeFields = parseCodexConfigFields(home.content);
-      if (homeFields.model !== '') {
-        templateContent = setTomlStringValue(templateContent, '', 'model', homeFields.model, false).content;
-      }
-      let modelProvider = homeFields.modelProvider.trim();
-      if (modelProvider === '') modelProvider = 'openai';
-      templateContent = setTomlStringValue(templateContent, '', 'model_provider', modelProvider, true).content;
-    }
-
     const tplPath = this.templatePath();
     await fs.mkdir(path.dirname(tplPath), { recursive: true });
-    await fs.writeFile(tplPath, templateContent);
+    await fs.writeFile(tplPath, rawContent);
 
     const homePath = this.configPath();
     const homeRead = await readTextFile(homePath);
-    let homeUpdated = templateContent;
+    let homeUpdated = rawContent;
     if (homeRead.exists) {
-      homeUpdated = syncTomlExistingKeysFromTemplate(homeRead.content, templateContent);
-      homeUpdated = removeCodexStaleRootKeys(homeUpdated, templateContent);
+      homeUpdated = syncTomlExistingKeysFromTemplate(homeRead.content, rawContent);
+      homeUpdated = removeCodexStaleRootKeys(homeUpdated, rawContent);
     }
-    homeUpdated = this.expandNotifyPathForHome(homeUpdated);
 
     await fs.mkdir(path.dirname(homePath), { recursive: true });
     await fs.writeFile(homePath, homeUpdated);
-
-    await this.syncNotifyScript();
   }
 
   async saveAuthAPIKey(apiKey: string): Promise<void> {
@@ -225,17 +234,20 @@ export class CodexSettingsService {
     await fs.writeFile(p, encoded);
   }
 
+  async templateSyncStatus(): Promise<{ synced: boolean; templateExists: boolean; targetExists: boolean }> {
+    const tplRaw = await readTextFile(this.templatePath());
+    const targetRaw = await readTextFile(this.configPath());
+    if (!tplRaw.exists || !targetRaw.exists) {
+      return { synced: false, templateExists: tplRaw.exists, targetExists: targetRaw.exists };
+    }
+    const synced = isTomlRootSubset(tplRaw.content, targetRaw.content);
+    return { synced, templateExists: true, targetExists: true };
+  }
+
   async postInstallSetup(): Promise<void> {
     const tpl = await readTextFile(this.templatePath());
     if (!tpl.exists) return;
     let content = tpl.content;
-
-    if (parseCodexConfigFields(content).model.trim() === '') {
-      const models = this.deps.config.models;
-      if (models.length > 0) {
-        content = setTomlStringValue(content, '', 'model', models[0]!, true).content;
-      }
-    }
 
     if (parseCodexConfigFields(content).baseUrl.trim() === '') {
       if (hasSectionInToml(content, 'model_providers.custom')) {
@@ -377,4 +389,27 @@ export function removeCodexStaleRootKeys(homeContent: string, templateContent: s
     }
   }
   return updated;
+}
+
+function isTomlRootSubset(template: string, target: string): boolean {
+  const SKIP_KEYS = new Set(['notify']);
+  const extractRootKVs = (content: string) => {
+    const m = new Map<string, string>();
+    for (const line of content.split('\n')) {
+      const t = line.trim();
+      if (parseTomlSection(t).ok) break;
+      const kv = parseTomlKeyValue(t);
+      if (kv.ok && !SKIP_KEYS.has(kv.key)) {
+        m.set(kv.key, stripTomlInlineComment(kv.value).trim());
+      }
+    }
+    return m;
+  };
+  const tplKVs = extractRootKVs(template);
+  const targetKVs = extractRootKVs(target);
+  for (const [k, v] of tplKVs) {
+    if (!targetKVs.has(k)) continue;
+    if (targetKVs.get(k) !== v) return false;
+  }
+  return true;
 }

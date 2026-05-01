@@ -1,19 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
+import { Badge } from '@/components/ui/badge';
+import { useToast } from '@/components/toast';
+import { ClaudeInstructions } from './instructions';
 
-interface SettingsPayload {
-  baseUrl: string;
-  authToken: string;
-  model: string;
-  haikuModel: string;
-  autoCompactEnabled: boolean;
-  renderModelEnvEnabled: boolean;
+interface SettingsPathPayload {
   path: string;
 }
 
@@ -23,243 +17,208 @@ interface TemplatePayload {
   exists: boolean;
 }
 
-interface PowerlinePayload {
+interface GlobalConfigPayload {
   content: string;
+  path?: string;
+  templatePath?: string;
   exists: boolean;
 }
 
-interface OnboardingPayload {
-  skipped: boolean;
+interface SyncStatusPayload {
+  synced: boolean;
+  templateExists: boolean;
+  targetExists: boolean;
+}
+
+function SyncBadge({ status }: { status?: SyncStatusPayload }) {
+  if (!status) return null;
+  if (status.synced) return <Badge className="bg-green-600 text-white">Applied</Badge>;
+  return <Badge variant="secondary">Out of sync</Badge>;
 }
 
 export function ClaudeSettings() {
   const qc = useQueryClient();
-  const { data: settings } = useQuery<SettingsPayload>({
+  const toast = useToast();
+  const { data: settings } = useQuery<SettingsPathPayload>({
     queryKey: ['claude', 'settings'],
-    queryFn: () => apiGet<SettingsPayload>('/api/claude/settings'),
+    queryFn: () => apiGet<SettingsPathPayload>('/api/claude/settings'),
   });
   const { data: template } = useQuery<TemplatePayload>({
     queryKey: ['claude', 'settings', 'template'],
     queryFn: () => apiGet<TemplatePayload>('/api/claude/settings/template'),
   });
-  const { data: powerline } = useQuery<PowerlinePayload>({
-    queryKey: ['claude', 'powerline'],
-    queryFn: () => apiGet<PowerlinePayload>('/api/claude/powerline'),
+  const { data: globalConfig } = useQuery<GlobalConfigPayload>({
+    queryKey: ['claude', 'global-config'],
+    queryFn: () => apiGet<GlobalConfigPayload>('/api/claude/global-config'),
   });
-  const { data: onboarding } = useQuery<OnboardingPayload>({
-    queryKey: ['claude', 'onboarding'],
-    queryFn: () => apiGet<OnboardingPayload>('/api/claude/onboarding'),
+  const { data: tplSync } = useQuery<SyncStatusPayload>({
+    queryKey: ['claude', 'settings', 'template', 'sync-status'],
+    queryFn: () => apiGet<SyncStatusPayload>('/api/claude/settings/template/sync-status'),
+    refetchInterval: 5000,
+  });
+  const { data: gcSync } = useQuery<SyncStatusPayload>({
+    queryKey: ['claude', 'global-config', 'sync-status'],
+    queryFn: () => apiGet<SyncStatusPayload>('/api/claude/global-config/sync-status'),
+    refetchInterval: 5000,
   });
 
-  const [baseUrl, setBaseUrl] = useState('');
-  const [authToken, setAuthToken] = useState('');
-  const [model, setModel] = useState('');
-  const [haikuModel, setHaikuModel] = useState('');
   const [tplContent, setTplContent] = useState('');
-  const [plContent, setPlContent] = useState('');
-  const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
+  const [gcContent, setGcContent] = useState('');
 
-  useEffect(() => {
-    if (settings) {
-      setBaseUrl(settings.baseUrl ?? '');
-      setAuthToken(settings.authToken ?? '');
-      setModel(settings.model ?? '');
-      setHaikuModel(settings.haikuModel ?? '');
-    }
-  }, [settings]);
   useEffect(() => {
     if (template) setTplContent(template.content ?? '');
   }, [template]);
   useEffect(() => {
-    if (powerline) setPlContent(powerline.content ?? '');
-  }, [powerline]);
+    if (globalConfig) setGcContent(globalConfig.content ?? '');
+  }, [globalConfig]);
 
-  const saveSettings = useMutation({
-    mutationFn: () =>
-      apiPost('/api/claude/settings/save', { baseUrl, authToken, model, haikuModel }),
-    onSuccess: () => {
-      setNotice('设置已保存');
-      setError('');
-      qc.invalidateQueries({ queryKey: ['claude', 'settings'] });
-    },
-    onError: (e: Error) => setError(e.message),
-  });
-  const setAutoCompact = useMutation({
-    mutationFn: (enabled: boolean) =>
-      apiPost('/api/claude/settings/auto-compact/set', { enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['claude', 'settings'] }),
-  });
-  const setRenderModelEnv = useMutation({
-    mutationFn: (enabled: boolean) =>
-      apiPost('/api/claude/settings/render-model-env/set', { enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['claude', 'settings'] }),
-  });
-  const skipOnboarding = useMutation({
-    mutationFn: () => apiPost('/api/claude/onboarding/skip'),
-    onSuccess: () => {
-      setNotice('已跳过 onboarding');
-      qc.invalidateQueries({ queryKey: ['claude', 'onboarding'] });
-    },
-    onError: (e: Error) => setError(e.message),
-  });
   const saveTemplate = useMutation({
     mutationFn: (content: string) => apiPost('/api/claude/settings/template/save', { content }),
     onSuccess: () => {
-      setNotice('模版已保存');
-      setError('');
+      toast.success('settings.json applied');
       qc.invalidateQueries({ queryKey: ['claude', 'settings', 'template'] });
+      qc.invalidateQueries({ queryKey: ['claude', 'settings'] });
+      qc.invalidateQueries({ queryKey: ['claude', 'settings', 'template', 'sync-status'] });
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
-  const savePowerline = useMutation({
-    mutationFn: (content: string) => apiPost('/api/claude/powerline/save', { content }),
+  const saveGlobalConfig = useMutation({
+    mutationFn: (content: string) => apiPost('/api/claude/global-config/save', { content }),
     onSuccess: () => {
-      setNotice('powerline 已保存');
-      setError('');
-      qc.invalidateQueries({ queryKey: ['claude', 'powerline'] });
+      toast.success('claude.json applied');
+      qc.invalidateQueries({ queryKey: ['claude', 'global-config'] });
+      qc.invalidateQueries({ queryKey: ['claude', 'global-config', 'sync-status'] });
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const handleSaveTemplate = () => {
-    setNotice('');
-    setError('');
     try {
       JSON.parse(tplContent);
     } catch {
-      setError('模版 JSON 格式错误');
+      toast.error('settings.json is not valid JSON');
       return;
     }
     saveTemplate.mutate(tplContent);
   };
-  const handleSavePowerline = () => {
-    setNotice('');
-    setError('');
+  const handleSaveGlobalConfig = () => {
     try {
-      JSON.parse(plContent);
+      JSON.parse(gcContent);
     } catch {
-      setError('powerline JSON 格式错误');
+      toast.error('~/.claude.json is not valid JSON');
       return;
     }
-    savePowerline.mutate(plContent);
+    saveGlobalConfig.mutate(gcContent);
+  };
+
+  const handleJsonKeyDown = (
+    e: KeyboardEvent<HTMLTextAreaElement>,
+    setter: (v: string) => void,
+  ) => {
+    const ta = e.currentTarget;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const value = ta.value;
+      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+      const currentLine = value.slice(lineStart, start);
+      const indentMatch = currentLine.match(/^[ \t]*/);
+      let indent = indentMatch ? indentMatch[0] : '';
+      const prevChar = value.slice(0, start).trimEnd().slice(-1);
+      const nextChar = value.slice(end).trimStart().charAt(0);
+      const opensBlock = prevChar === '{' || prevChar === '[';
+      const closesBlock = nextChar === '}' || nextChar === ']';
+      let insert = '\n' + indent;
+      if (opensBlock) {
+        insert = '\n' + indent + '  ';
+        if (closesBlock) insert += '\n' + indent;
+      }
+      const next = value.slice(0, start) + insert + value.slice(end);
+      setter(next);
+      const caret = start + (opensBlock ? 1 + indent.length + 2 : insert.length);
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = caret;
+      });
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const value = ta.value;
+      const next = value.slice(0, start) + '  ' + value.slice(end);
+      setter(next);
+      const caret = start + 2;
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = caret;
+      });
+    }
   };
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Claude 设置</CardTitle>
+          <CardTitle className="flex items-center justify-between gap-2">
+            <span>settings.json</span>
+            <SyncBadge status={tplSync} />
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="text-xs text-muted-foreground">
-            settings.json: <code>{settings?.path || '~/.claude/settings.json'}</code>
+            Template: <code>{template?.path || 'conf/claude/settings.json'}</code>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <Label>ANTHROPIC_BASE_URL</Label>
-              <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label>ANTHROPIC_AUTH_TOKEN</Label>
-              <Input value={authToken} onChange={(e) => setAuthToken(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label>ANTHROPIC_MODEL</Label>
-              <Input value={model} onChange={(e) => setModel(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label>ANTHROPIC_DEFAULT_HAIKU_MODEL</Label>
-              <Input value={haikuModel} onChange={(e) => setHaikuModel(e.target.value)} />
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <div>
-              <Label>自动压缩 (autoCompactEnabled)</Label>
-              <p className="text-xs text-muted-foreground">控制 Claude 的对话自动压缩</p>
-            </div>
-            <Switch
-              checked={!!settings?.autoCompactEnabled}
-              onCheckedChange={(v) => setAutoCompact.mutate(v)}
-              disabled={setAutoCompact.isPending}
-            />
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <div>
-              <Label>渲染模型环境变量 (renderModelEnv)</Label>
-              <p className="text-xs text-muted-foreground">关闭后将不写入 ANTHROPIC_MODEL 等环境变量</p>
-            </div>
-            <Switch
-              checked={!!settings?.renderModelEnvEnabled}
-              onCheckedChange={(v) => setRenderModelEnv.mutate(v)}
-              disabled={setRenderModelEnv.isPending}
-            />
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <div>
-              <Label>跳过 Onboarding</Label>
-              <p className="text-xs text-muted-foreground">
-                状态: {onboarding?.skipped ? '已跳过' : '未跳过'}
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => skipOnboarding.mutate()}
-              disabled={skipOnboarding.isPending || !!onboarding?.skipped}
-            >
-              {onboarding?.skipped ? '已跳过' : '跳过'}
-            </Button>
-          </div>
-          {notice ? <div className="text-xs text-green-500">{notice}</div> : null}
-          {error ? <div className="text-xs text-destructive">{error}</div> : null}
-          <div className="flex gap-2">
-            <Button onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending}>
-              {saveSettings.isPending ? '保存中...' : '保存设置'}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>settings.json 模版</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
           <div className="text-xs text-muted-foreground">
-            模版路径: <code>{template?.path || 'conf/claude/settings.json'}</code>
+            Target: <code>{settings?.path || '~/.claude/settings.json'}</code>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Apply strategy: overwrite <code>~/.claude/settings.json</code> entirely with the template content.
           </div>
           <textarea
             value={tplContent}
             onChange={(e) => setTplContent(e.target.value)}
+            onKeyDown={(e) => handleJsonKeyDown(e, setTplContent)}
             spellCheck={false}
             className="h-72 w-full resize-y rounded-md border border-border bg-muted/30 p-3 font-mono text-xs"
           />
           <Button onClick={handleSaveTemplate} disabled={saveTemplate.isPending}>
-            {saveTemplate.isPending ? '保存中...' : '保存模版'}
+            {saveTemplate.isPending ? 'Applying...' : 'Apply'}
           </Button>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Powerline 配置</CardTitle>
+          <CardTitle className="flex items-center justify-between gap-2">
+            <span>claude.json</span>
+            <SyncBadge status={gcSync} />
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="text-xs text-muted-foreground">
-            <code>conf/claude/claude-powerline.json</code>
+            Template: <code>{globalConfig?.templatePath || 'conf/claude/claude.json'}</code>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Target: <code>{globalConfig?.path || '~/.claude.json'}</code>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Apply strategy: merge top-level keys into <code>~/.claude.json</code>; fields not present here are kept untouched.
           </div>
           <textarea
-            value={plContent}
-            onChange={(e) => setPlContent(e.target.value)}
+            value={gcContent}
+            onChange={(e) => setGcContent(e.target.value)}
+            onKeyDown={(e) => handleJsonKeyDown(e, setGcContent)}
             spellCheck={false}
-            className="h-60 w-full resize-y rounded-md border border-border bg-muted/30 p-3 font-mono text-xs"
+            className="h-72 w-full resize-y rounded-md border border-border bg-muted/30 p-3 font-mono text-xs"
           />
-          <Button onClick={handleSavePowerline} disabled={savePowerline.isPending}>
-            {savePowerline.isPending ? '保存中...' : '保存 Powerline'}
+          <Button onClick={handleSaveGlobalConfig} disabled={saveGlobalConfig.isPending}>
+            {saveGlobalConfig.isPending ? 'Applying...' : 'Apply'}
           </Button>
         </CardContent>
       </Card>
+
+      <ClaudeInstructions />
     </div>
   );
 }

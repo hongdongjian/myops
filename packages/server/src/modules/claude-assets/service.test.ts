@@ -143,11 +143,11 @@ describe('ClaudeAssetsService rules', () => {
 });
 
 describe('ClaudeAssetsService skills', () => {
-  it('listSkills marks installed when dir exists', () => {
+  it('listSkills marks installed when dir exists', async () => {
     const { deps } = makeDeps();
     fs.mkdirSync(path.join(deps.paths.claudePath('skills'), 'superpowers'), { recursive: true });
     const svc = new ClaudeAssetsService(deps);
-    const items = svc.listSkills();
+    const items = await svc.listSkills();
     expect(items[0]!.installed).toBe(true);
   });
 });

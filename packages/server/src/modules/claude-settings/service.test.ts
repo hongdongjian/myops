@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { ClaudeSettingsService, stripModelEnvKeys } from './service.js';
+import { ClaudeSettingsService } from './service.js';
 import type { Deps } from '../../deps.js';
 import type { Paths } from '../../paths.js';
 
@@ -39,16 +39,10 @@ describe('ClaudeSettingsService', () => {
     expect(s.baseUrl).toBe('');
     expect(s.authToken).toBe('');
     expect(s.autoCompactEnabled).toBe(true);
-    expect(s.renderModelEnvEnabled).toBe(true);
   });
 
   it('saveSettings writes env to settings.json', async () => {
     const { deps } = makeDeps();
-    // pre-create conf dir to avoid hooks failure
-    fs.mkdirSync(path.join(deps.paths.confPath('claude', 'hooks')), { recursive: true });
-    fs.writeFileSync(path.join(deps.paths.confPath('claude', 'hooks'), 'notify-permission.sh'), '#!/bin/sh\n');
-    fs.writeFileSync(path.join(deps.paths.confPath('claude', 'hooks'), 'notify-stop.sh'), '#!/bin/sh\n');
-
     const svc = new ClaudeSettingsService(deps);
     await svc.saveSettings({ baseUrl: 'http://x', authToken: 't', model: 'm', haikuModel: 'h' });
 
@@ -95,20 +89,53 @@ describe('ClaudeSettingsService', () => {
     const svc = new ClaudeSettingsService(deps);
     await expect(svc.savePowerline('not json')).rejects.toThrow(/valid JSON/);
   });
-});
 
-describe('stripModelEnvKeys', () => {
-  it('removes model env keys but keeps others', () => {
-    const input = JSON.stringify({
-      env: { ANTHROPIC_MODEL: 'x', ANTHROPIC_BASE_URL: 'y', OTHER: 'z' },
-    });
-    const out = JSON.parse(stripModelEnvKeys(input));
-    expect(out.env.ANTHROPIC_MODEL).toBeUndefined();
-    expect(out.env.ANTHROPIC_BASE_URL).toBe('y');
-    expect(out.env.OTHER).toBe('z');
+  it('saveGlobalConfig writes template and merges keys into ~/.claude.json', async () => {
+    const { deps } = makeDeps();
+    const svc = new ClaudeSettingsService(deps);
+    fs.mkdirSync(path.dirname(svc.globalConfigPath()), { recursive: true });
+    fs.writeFileSync(
+      svc.globalConfigPath(),
+      JSON.stringify({ keep: 'me', autoCompactEnabled: true })
+    );
+    const newContent = JSON.stringify(
+      { autoCompactEnabled: false, hasCompletedOnboarding: true },
+      null,
+      2,
+    );
+    await svc.saveGlobalConfig(newContent);
+
+    const tpl = fs.readFileSync(svc.globalConfigTemplatePath(), 'utf-8');
+    expect(tpl).toBe(newContent);
+
+    const gc = JSON.parse(fs.readFileSync(svc.globalConfigPath(), 'utf-8'));
+    expect(gc.keep).toBe('me');
+    expect(gc.autoCompactEnabled).toBe(false);
+    expect(gc.hasCompletedOnboarding).toBe(true);
   });
 
-  it('returns input unchanged when not JSON', () => {
-    expect(stripModelEnvKeys('not json')).toBe('not json');
+  it('saveGlobalConfig rejects invalid JSON', async () => {
+    const { deps } = makeDeps();
+    const svc = new ClaudeSettingsService(deps);
+    await expect(svc.saveGlobalConfig('not json')).rejects.toThrow(/valid JSON/);
+  });
+
+  it('getGlobalConfig returns empty content when template missing', async () => {
+    const { deps } = makeDeps();
+    const svc = new ClaudeSettingsService(deps);
+    const r = await svc.getGlobalConfig();
+    expect(r.exists).toBe(false);
+    expect(r.content).toBe('');
+  });
+
+  it('getGlobalConfig returns cached template content as-is', async () => {
+    const { deps } = makeDeps();
+    const svc = new ClaudeSettingsService(deps);
+    fs.mkdirSync(path.dirname(svc.globalConfigTemplatePath()), { recursive: true });
+    const cached = JSON.stringify({ autoCompactEnabled: false, custom: 1 }, null, 2);
+    fs.writeFileSync(svc.globalConfigTemplatePath(), cached);
+    const r = await svc.getGlobalConfig();
+    expect(r.exists).toBe(true);
+    expect(r.content).toBe(cached);
   });
 });

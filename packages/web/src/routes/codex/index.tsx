@@ -1,30 +1,36 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useTabParam } from '@/lib/use-tab-param';
 import { CodexSettings } from './settings';
 import { CodexMcp } from './mcp';
-import { CodexAccounts } from './accounts';
-import { CodexAgents } from './agents';
+import { CodexProviders } from './providers';
 import { CodexSkills } from './skills';
-import { CodexVersion } from './version';
+import { CodexVersion, CodexChangelogPanel } from './version';
+
+const TAB_VALUES = ['version', 'settings', 'providers', 'mcp', 'skills'] as const;
 
 export function Codex() {
+  const [active, setActive] = useTabParam(TAB_VALUES, 'version');
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Codex</h1>
-      <Tabs defaultValue="settings">
+      <Tabs value={active} onValueChange={setActive}>
         <TabsList>
-          <TabsTrigger value="settings">设置</TabsTrigger>
+          <TabsTrigger value="version">Version</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+          <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="mcp">MCP</TabsTrigger>
-          <TabsTrigger value="accounts">账号</TabsTrigger>
-          <TabsTrigger value="agents">AGENTS.md</TabsTrigger>
           <TabsTrigger value="skills">Skills</TabsTrigger>
-          <TabsTrigger value="version">版本</TabsTrigger>
         </TabsList>
+        <TabsContent value="version">
+          <div className="space-y-4">
+            <CodexVersion />
+            <CodexChangelogPanel />
+          </div>
+        </TabsContent>
         <TabsContent value="settings"><CodexSettings /></TabsContent>
+        <TabsContent value="providers"><CodexProviders /></TabsContent>
         <TabsContent value="mcp"><CodexMcp /></TabsContent>
-        <TabsContent value="accounts"><CodexAccounts /></TabsContent>
-        <TabsContent value="agents"><CodexAgents /></TabsContent>
         <TabsContent value="skills"><CodexSkills /></TabsContent>
-        <TabsContent value="version"><CodexVersion /></TabsContent>
       </Tabs>
     </div>
   );

@@ -8,6 +8,10 @@ import type {
   PluginMarketplace,
   PluginPresetDefinition,
   PluginPresetStatus,
+  PluginActiveOp,
+  PluginOpAction,
+  AddPresetRequest,
+  UpdatePresetRequest,
 } from './schema.js';
 
 interface RunResult {
@@ -55,6 +59,9 @@ export function buildEnableArgs(packageId: string, scope: string): string[] {
 export function buildDisableArgs(packageId: string, scope: string): string[] {
   return ['plugin', 'disable', packageId, '--scope', scope];
 }
+export function buildUpdateArgs(packageId: string, scope: string): string[] {
+  return ['plugin', 'update', packageId, '--scope', scope];
+}
 export function buildUninstallArgs(packageId: string, scope: string): string[] {
   return ['plugin', 'uninstall', packageId, '--scope', scope];
 }
@@ -76,8 +83,17 @@ export function commandError(runErr: string | null, stdout: string, stderr: stri
 export class ClaudePluginService {
   private readonly actionMu = new Mutex();
   private readonly marksMu = new Mutex();
+  private readonly activeOps = new Map<string, PluginActiveOp>();
 
   constructor(private readonly deps: Deps) {}
+
+  private startOp(pkg: string, action: PluginOpAction): void {
+    this.activeOps.set(pkg, { package: pkg, action, startedAt: Date.now() });
+  }
+
+  private endOp(pkg: string): void {
+    this.activeOps.delete(pkg);
+  }
 
   presetConfigPath(): string {
     return this.deps.paths.confPath('claude', 'plugins.json');
@@ -130,6 +146,7 @@ export class ClaudePluginService {
       installed,
       marketplaces,
       others,
+      activeOps: Array.from(this.activeOps.values()),
     };
   }
 
@@ -145,83 +162,171 @@ export class ClaudePluginService {
   }> {
     const preset = await this.findPreset(rawPackage);
     await this.ensureMarketplace(preset);
-    return this.actionMu.runExclusive(async () => {
-      let result = await this.runClaude(buildInstallArgs(preset.package, preset.scope));
-      let runErr = errFromResult(result);
-      if (runErr) {
-        const installed = await this.hasInScope(preset.package, preset.scope);
-        if (installed) runErr = null;
-      }
-      if (!runErr) {
-        const enable = await this.setEnabled(preset.package, preset.scope, true);
-        result = {
-          stdout: joinCommandOutput(result.stdout, enable.result.stdout),
-          stderr: joinCommandOutput(result.stderr, enable.result.stderr),
-          code: enable.runErr ? 1 : 0,
-        };
-        if (enable.runErr) runErr = enable.runErr;
-      }
-      if (!runErr) {
-        try {
-          await this.setAutoEnableMark(preset.package, preset.scope, true);
-        } catch (err) {
-          runErr = `failed to save plugin auto-start mark: ${(err as Error).message}`;
+    this.startOp(preset.package, 'installing');
+    try {
+      return await this.actionMu.runExclusive(async () => {
+        let result = await this.runClaude(buildInstallArgs(preset.package, preset.scope));
+        let runErr = errFromResult(result);
+        if (runErr) {
+          const installed = await this.hasInScope(preset.package, preset.scope);
+          if (installed) runErr = null;
         }
-      }
-      return this.toActionResponse(preset.package, preset.scope, result, runErr);
-    });
+        if (!runErr) {
+          const enable = await this.setEnabled(preset.package, preset.scope, true);
+          result = {
+            stdout: joinCommandOutput(result.stdout, enable.result.stdout),
+            stderr: joinCommandOutput(result.stderr, enable.result.stderr),
+            code: enable.runErr ? 1 : 0,
+          };
+          if (enable.runErr) runErr = enable.runErr;
+        }
+        if (!runErr) {
+          try {
+            await this.setAutoEnableMark(preset.package, preset.scope, true);
+          } catch (err) {
+            runErr = `failed to save plugin auto-start mark: ${(err as Error).message}`;
+          }
+        }
+        return this.toActionResponse(preset.package, preset.scope, result, runErr);
+      });
+    } finally {
+      this.endOp(preset.package);
+    }
   }
 
   async enable(rawPackage: string) {
     const preset = await this.findPreset(rawPackage);
-    return this.actionMu.runExclusive(async () => {
-      const enable = await this.setEnabled(preset.package, preset.scope, true);
-      let runErr = enable.runErr;
-      if (!runErr) {
-        try {
-          await this.setAutoEnableMark(preset.package, preset.scope, true);
-        } catch (err) {
-          runErr = `failed to save plugin auto-start mark: ${(err as Error).message}`;
+    this.startOp(preset.package, 'enabling');
+    try {
+      return await this.actionMu.runExclusive(async () => {
+        const enable = await this.setEnabled(preset.package, preset.scope, true);
+        let runErr = enable.runErr;
+        if (!runErr) {
+          try {
+            await this.setAutoEnableMark(preset.package, preset.scope, true);
+          } catch (err) {
+            runErr = `failed to save plugin auto-start mark: ${(err as Error).message}`;
+          }
         }
-      }
-      return this.toActionResponse(preset.package, preset.scope, enable.result, runErr);
-    });
+        return this.toActionResponse(preset.package, preset.scope, enable.result, runErr);
+      });
+    } finally {
+      this.endOp(preset.package);
+    }
   }
 
   async disable(rawPackage: string) {
     const preset = await this.findPreset(rawPackage);
-    return this.actionMu.runExclusive(async () => {
-      const disable = await this.setEnabled(preset.package, preset.scope, false);
-      let runErr = disable.runErr;
-      if (!runErr) {
-        try {
-          await this.setAutoEnableMark(preset.package, preset.scope, false);
-        } catch (err) {
-          runErr = `failed to save plugin auto-start mark: ${(err as Error).message}`;
+    this.startOp(preset.package, 'disabling');
+    try {
+      return await this.actionMu.runExclusive(async () => {
+        const disable = await this.setEnabled(preset.package, preset.scope, false);
+        let runErr = disable.runErr;
+        if (!runErr) {
+          try {
+            await this.setAutoEnableMark(preset.package, preset.scope, false);
+          } catch (err) {
+            runErr = `failed to save plugin auto-start mark: ${(err as Error).message}`;
+          }
         }
-      }
-      return this.toActionResponse(preset.package, preset.scope, disable.result, runErr);
-    });
+        return this.toActionResponse(preset.package, preset.scope, disable.result, runErr);
+      });
+    } finally {
+      this.endOp(preset.package);
+    }
+  }
+
+  async update(rawPackage: string) {
+    const preset = await this.findPreset(rawPackage);
+    this.startOp(preset.package, 'updating');
+    try {
+      return await this.actionMu.runExclusive(async () => {
+        const result = await this.runClaude(buildUpdateArgs(preset.package, preset.scope));
+        const runErr = errFromResult(result);
+        return this.toActionResponse(preset.package, preset.scope, result, runErr);
+      });
+    } finally {
+      this.endOp(preset.package);
+    }
   }
 
   async uninstall(rawPackage: string) {
     const preset = await this.findPreset(rawPackage);
-    return this.actionMu.runExclusive(async () => {
-      const result = await this.runClaude(buildUninstallArgs(preset.package, preset.scope));
-      let runErr = errFromResult(result);
-      if (runErr) {
-        const installed = await this.hasInScope(preset.package, preset.scope);
-        if (!installed) runErr = null;
-      }
-      if (!runErr) {
-        try {
-          await this.setAutoEnableMark(preset.package, preset.scope, false);
-        } catch (err) {
-          runErr = `failed to save plugin auto-start mark: ${(err as Error).message}`;
+    this.startOp(preset.package, 'uninstalling');
+    try {
+      return await this.actionMu.runExclusive(async () => {
+        const result = await this.runClaude(buildUninstallArgs(preset.package, preset.scope));
+        let runErr = errFromResult(result);
+        if (runErr) {
+          const installed = await this.hasInScope(preset.package, preset.scope);
+          if (!installed) runErr = null;
         }
-      }
-      return this.toActionResponse(preset.package, preset.scope, result, runErr);
-    });
+        if (!runErr) {
+          try {
+            await this.setAutoEnableMark(preset.package, preset.scope, false);
+          } catch (err) {
+            runErr = `failed to save plugin auto-start mark: ${(err as Error).message}`;
+          }
+        }
+        return this.toActionResponse(preset.package, preset.scope, result, runErr);
+      });
+    } finally {
+      this.endOp(preset.package);
+    }
+  }
+
+  async updatePreset(req: UpdatePresetRequest): Promise<void> {
+    const pkg = req.package.trim();
+    const presets = await this.loadPresets();
+    const idx = presets.findIndex((p) => p.package === pkg);
+    if (idx === -1) throw new AppError('NOT_FOUND', `plugin preset not found: ${pkg}`, 404);
+    // idx is guaranteed valid here, cast is safe
+    const existing = presets[idx] as PluginPresetDefinition;
+    const updated: PluginPresetDefinition = {
+      name: req.name.trim(),
+      package: existing.package,
+      scope: existing.scope,
+      description: req.description?.trim() ?? existing.description,
+      source: req.source?.trim() ?? existing.source,
+      link: req.link?.trim() || existing.link,
+    };
+    await this.savePresets(presets.map((p, i) => (i === idx ? updated : p)));
+  }
+
+  async addPreset(req: AddPresetRequest): Promise<void> {
+    const presets = await this.loadPresets();
+    const pkg = req.package.trim();
+    if (presets.some((p) => p.package === pkg)) {
+      throw new AppError('DUPLICATE_PRESET', `plugin preset already exists: ${pkg}`, 400);
+    }
+    const next: PluginPresetDefinition[] = [
+      ...presets,
+      {
+        name: req.name.trim(),
+        package: pkg,
+        description: req.description?.trim() ?? '',
+        source: req.source?.trim() ?? '',
+        scope: 'user',
+        link: req.link?.trim() || undefined,
+      },
+    ];
+    await this.savePresets(next);
+  }
+
+  async removePreset(packageId: string): Promise<void> {
+    const trimmed = packageId.trim();
+    const presets = await this.loadPresets();
+    const next = presets.filter((p) => p.package !== trimmed);
+    if (next.length === presets.length) {
+      throw new AppError('NOT_FOUND', `plugin preset not found: ${trimmed}`, 404);
+    }
+    await this.savePresets(next);
+  }
+
+  private async savePresets(presets: PluginPresetDefinition[]): Promise<void> {
+    const p = this.presetConfigPath();
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, JSON.stringify(presets, null, 2));
   }
 
   // ── auto enable ──────────────────────────────────────────────────────────

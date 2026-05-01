@@ -3,6 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { fetch as undiciFetch, EnvHttpProxyAgent } from 'undici';
 import { AppError } from '../../core/errors.js';
 import type { Deps, CodexAccountsHook } from '../../deps.js';
 import {
@@ -37,6 +38,8 @@ export const CODEX_OAUTH_TIMEOUT_MS = 10 * 60 * 1000;
 export const CODEX_OAUTH_RETENTION_MS = 15 * 60 * 1000;
 export const CODEX_TOKEN_REFRESH_LEEWAY_MS = 60 * 1000;
 export const CODEX_QUOTA_STALE_INTERVAL_MS = 10 * 60 * 1000;
+
+const proxyAgent = new EnvHttpProxyAgent();
 
 // ── primitive helpers ─────────────────────────────────────────────────────
 
@@ -253,10 +256,11 @@ export async function refreshAccessToken(refreshToken: string): Promise<CodexSto
     refresh_token: refreshToken,
     client_id: CODEX_OAUTH_CLIENT_ID,
   });
-  const res = await fetch(CODEX_OAUTH_TOKEN_ENDPOINT, {
+  const res = await undiciFetch(CODEX_OAUTH_TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: form.toString(),
+    dispatcher: proxyAgent,
   });
   const body = await res.text();
   if (!res.ok) throw new Error(`refresh token failed: ${res.status} ${res.statusText}`);
@@ -317,6 +321,7 @@ export function buildAccountView(account: CodexStoredAccount, currentAccountId: 
     email: account.email,
     userId: account.userId,
     remark: account.remark,
+    model: account.model,
     planType: account.planType,
     accountId: account.accountId,
     organizationId: account.organizationId,
@@ -479,6 +484,47 @@ export class CodexAccountsService implements CodexAccountsHook {
     };
   }
 
+  // ── quota refresh ─────────────────────────────────────────────────────────
+
+  async refreshQuota(accountId: string): Promise<CodexAccountView> {
+    const store = await this.loadStore();
+    const idx = store.accounts.findIndex((a) => a.id === accountId);
+    if (idx === -1) throw new AppError('NOT_FOUND', 'account not found', 404);
+    const a = { ...store.accounts[idx]! };
+    try {
+      await refreshStoredAccountTokens(a);
+    } catch (err) {
+      a.quotaError = buildQuotaError((err as Error).message);
+      a.quotaUpdatedAt = Date.now();
+      const next = { ...store, accounts: store.accounts.map((x, i) => (i === idx ? a : x)) };
+      await this.saveStore(next);
+      const { id: currentId } = await this.resolveCurrent(next);
+      return buildAccountView(a, currentId);
+    }
+    try {
+      const { quota, planType } = await fetchQuota(a);
+      a.quota = quota;
+      a.planType = planType !== '' ? planType : a.planType;
+      a.quotaUpdatedAt = Date.now();
+      a.quotaError = undefined;
+    } catch (err) {
+      a.quotaError = buildQuotaError((err as Error).message);
+      a.quotaUpdatedAt = Date.now();
+    }
+    const next = { ...store, accounts: store.accounts.map((x, i) => (i === idx ? a : x)) };
+    await this.saveStore(next);
+    const { id: currentId } = await this.resolveCurrent(next);
+    return buildAccountView(a, currentId);
+  }
+
+  // ── fast list ─────────────────────────────────────────────────────────────
+
+  async getAccountViews(): Promise<CodexAccountView[]> {
+    const store = await this.loadStore();
+    const { id: currentId } = await this.resolveCurrent(store);
+    return store.accounts.map((a) => buildAccountView(a, currentId));
+  }
+
   // ── import ───────────────────────────────────────────────────────────────
 
   async importLocalAccount(): Promise<CodexStoredAccount> {
@@ -573,6 +619,21 @@ export class CodexAccountsService implements CodexAccountsHook {
     });
   }
 
+  async saveAccountEdit(accountId: string, remark: string, model: string): Promise<CodexStoredAccount> {
+    return this.lock(async () => {
+      const store = await this.loadStoreUnlocked();
+      const target = accountId.trim();
+      const idx = store.accounts.findIndex((a) => a.id === target);
+      if (idx < 0) throw new AppError('CODEX_ACCOUNT_NOT_FOUND', `codex account not found: ${target}`, 400);
+      const a = store.accounts[idx]!;
+      a.remark = normalizeRemark(remark);
+      a.model = model.trim() || undefined;
+      store.accounts[idx] = a;
+      await this.saveStoreUnlocked(store);
+      return a;
+    });
+  }
+
   // ── auth file write ──────────────────────────────────────────────────────
 
   async writeCurrentAuth(account: CodexStoredAccount): Promise<void> {
@@ -642,11 +703,8 @@ export class CodexAccountsService implements CodexAccountsHook {
     return false;
   }
 
-  async buildPayload(force: boolean): Promise<Record<string, unknown>> {
+  async buildPayload(_force: boolean): Promise<Record<string, unknown>> {
     const store = await this.loadStore();
-    // hydrate quotas best-effort (skip if no network); we tolerate failures
-    await this.hydrateProfiles(store).catch(() => {});
-    await this.hydrateQuotas(store, force).catch(() => {});
     return this.buildPayloadFromStore(store);
   }
 
@@ -983,7 +1041,7 @@ async function fetchRemoteAccountProfile(account: CodexStoredAccount): Promise<R
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 20_000);
   try {
-    const res = await fetch(CODEX_ACCOUNTS_CHECK_URL, { headers, signal: ctrl.signal });
+    const res = await undiciFetch(CODEX_ACCOUNTS_CHECK_URL, { headers, signal: ctrl.signal, dispatcher: proxyAgent });
     const body = await res.text();
     if (!res.ok) throw new Error(`codex account profile failed: ${res.status} ${res.statusText}`);
     const payload = JSON.parse(body);
@@ -1098,7 +1156,7 @@ async function fetchQuota(account: CodexStoredAccount): Promise<{ quota: CodexSt
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 20_000);
   try {
-    const res = await fetch(CODEX_USAGE_URL, { headers, signal: ctrl.signal });
+    const res = await undiciFetch(CODEX_USAGE_URL, { headers, signal: ctrl.signal, dispatcher: proxyAgent });
     const body = await res.text();
     if (!res.ok) {
       const code = extractDetailCodeFromBody(body);
@@ -1253,10 +1311,11 @@ async function exchangeOAuthCode(code: string, codeVerifier: string, redirectUri
     client_id: CODEX_OAUTH_CLIENT_ID,
     code_verifier: codeVerifier,
   });
-  const res = await fetch(CODEX_OAUTH_TOKEN_ENDPOINT, {
+  const res = await undiciFetch(CODEX_OAUTH_TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: form.toString(),
+    dispatcher: proxyAgent,
   });
   const body = await res.text();
   if (!res.ok) throw new Error(`oauth token exchange failed: ${res.status} ${res.statusText}`);

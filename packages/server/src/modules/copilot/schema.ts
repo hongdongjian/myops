@@ -15,6 +15,11 @@ export const ProxySetRequestSchema = z.object({
 });
 export type ProxySetRequest = z.infer<typeof ProxySetRequestSchema>;
 
+export const PortSetRequestSchema = z.object({
+  port: z.number().int().positive(),
+});
+export type PortSetRequest = z.infer<typeof PortSetRequestSchema>;
+
 export const LogsQuerySchema = z.object({
   lines: z.string().optional(),
 });

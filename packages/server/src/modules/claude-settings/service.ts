@@ -1,17 +1,7 @@
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import path from 'node:path';
 import type { Deps } from '../../deps.js';
 import { AppError } from '../../core/errors.js';
-
-export const CLAUDE_HOOK_FILES = ['notify-permission.sh', 'notify-stop.sh'];
-
-export const MODEL_ENV_KEYS = [
-  'ANTHROPIC_MODEL',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL',
-  'ANTHROPIC_DEFAULT_OPUS_MODEL',
-];
 
 const ANTHROPIC_KEYS = new Set([
   'ANTHROPIC_BASE_URL',
@@ -37,6 +27,10 @@ export class ClaudeSettingsService {
     return path.join(this.deps.paths.homeDir, '.claude.json');
   }
 
+  globalConfigTemplatePath(): string {
+    return this.deps.paths.confPath('claude', 'claude.json');
+  }
+
   templatePath(): string {
     return this.deps.paths.confPath('claude', 'settings.json');
   }
@@ -47,10 +41,6 @@ export class ClaudeSettingsService {
 
   powerlineHomePath(): string {
     return this.deps.paths.claudePath('claude-powerline.json');
-  }
-
-  hooksDirPath(): string {
-    return this.deps.paths.claudePath('hooks');
   }
 
   // ── settings GET/SAVE ────────────────────────────────────────────────────
@@ -64,9 +54,15 @@ export class ClaudeSettingsService {
       model: envStr(m, 'ANTHROPIC_MODEL'),
       haikuModel: envStr(m, 'ANTHROPIC_DEFAULT_HAIKU_MODEL'),
       autoCompactEnabled: autoCompactEnabled(gc),
-      renderModelEnvEnabled: renderModelEnvEnabled(gc),
-      path: this.settingsPath(),
+      path: this.toDisplayPath(this.settingsPath()),
     };
+  }
+
+  private toDisplayPath(p: string): string {
+    const home = this.deps.paths.homeDir;
+    if (p === home) return '~';
+    if (p.startsWith(home + path.sep)) return '~' + p.slice(home.length);
+    return p;
   }
 
   async saveSettings(req: { baseUrl: string; authToken: string; model: string; haikuModel: string }): Promise<void> {
@@ -104,8 +100,6 @@ export class ClaudeSettingsService {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
-
-    await this.syncHooks();
   }
 
   // ── auto compact ─────────────────────────────────────────────────────────
@@ -117,58 +111,16 @@ export class ClaudeSettingsService {
     await writeJSONIndented(p, m);
   }
 
-  // ── render model env ─────────────────────────────────────────────────────
-
-  async setRenderModelEnv(enabled: boolean): Promise<void> {
-    const gcPath = this.globalConfigPath();
-    const gc = await readJSONObject(gcPath);
-    gc.renderModelEnv = enabled;
-    await writeJSONIndented(gcPath, gc);
-
-    const settingsPath = this.settingsPath();
-    const m = await readJSONObject(settingsPath);
-    const env = (m.env as JSONObject) ?? {};
-
-    if (enabled) {
-      try {
-        const tmpl = JSON.parse(await fs.readFile(this.templatePath(), 'utf-8')) as JSONObject;
-        const tmplEnv = (tmpl.env as JSONObject) ?? {};
-        for (const key of MODEL_ENV_KEYS) {
-          const v = tmplEnv[key];
-          if (typeof v === 'string' && v !== '') env[key] = v;
-        }
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          // template invalid JSON or unreadable; skip restore
-        }
-      }
-    } else {
-      for (const key of MODEL_ENV_KEYS) delete env[key];
-    }
-    m.env = env;
-    await writeJSONIndented(settingsPath, m);
-  }
-
-  isRenderModelEnvEnabled(): boolean {
-    try {
-      const raw = fsSync.readFileSync(this.globalConfigPath(), 'utf-8');
-      const gc = JSON.parse(raw) as JSONObject;
-      return renderModelEnvEnabled(gc);
-    } catch {
-      return true;
-    }
-  }
-
   // ── template ─────────────────────────────────────────────────────────────
 
   async getTemplate(): Promise<{ content: string; path: string; exists: boolean }> {
     const p = this.templatePath();
     try {
       const data = await fs.readFile(p, 'utf-8');
-      return { content: data, path: p, exists: true };
+      return { content: data, path: this.toDisplayPath(p), exists: true };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { content: '', path: p, exists: false };
+        return { content: '', path: this.toDisplayPath(p), exists: false };
       }
       throw err;
     }
@@ -184,12 +136,7 @@ export class ClaudeSettingsService {
 
     const settingsPath = this.settingsPath();
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-    let settingsContent = content;
-    if (!this.isRenderModelEnvEnabled()) {
-      settingsContent = stripModelEnvKeys(content);
-    }
-    await fs.writeFile(settingsPath, settingsContent);
-    await this.syncHooks();
+    await fs.writeFile(settingsPath, content);
   }
 
   // ── onboarding ───────────────────────────────────────────────────────────
@@ -210,6 +157,51 @@ export class ClaudeSettingsService {
     const m = await readJSONObject(p);
     m.hasCompletedOnboarding = true;
     await writeJSONIndented(p, m);
+  }
+
+  // ── global config (~/.claude.json) ───────────────────────────────────────
+
+  async getGlobalConfig(): Promise<{ content: string; path: string; templatePath: string; exists: boolean }> {
+    const tplPath = this.globalConfigTemplatePath();
+    const realPath = this.globalConfigPath();
+    try {
+      const data = await fs.readFile(tplPath, 'utf-8');
+      return {
+        content: data,
+        path: this.toDisplayPath(realPath),
+        templatePath: this.toDisplayPath(tplPath),
+        exists: true,
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return {
+          content: '',
+          path: this.toDisplayPath(realPath),
+          templatePath: this.toDisplayPath(tplPath),
+          exists: false,
+        };
+      }
+      throw err;
+    }
+  }
+
+  async saveGlobalConfig(content: string): Promise<void> {
+    if (!isValidJSON(content)) {
+      throw new AppError('INVALID_INPUT', 'content must be valid JSON', 400);
+    }
+    const incoming = JSON.parse(content) as JSONObject;
+
+    const tplPath = this.globalConfigTemplatePath();
+    await fs.mkdir(path.dirname(tplPath), { recursive: true });
+    await fs.writeFile(tplPath, content);
+
+    const realPath = this.globalConfigPath();
+    const existing = await readJSONObject(realPath);
+    const merged: JSONObject = { ...existing };
+    for (const [k, v] of Object.entries(incoming)) {
+      merged[k] = v;
+    }
+    await writeJSONIndented(realPath, merged);
   }
 
   // ── powerline ────────────────────────────────────────────────────────────
@@ -236,23 +228,34 @@ export class ClaudeSettingsService {
     await fs.writeFile(home, content);
   }
 
-  // ── hooks ────────────────────────────────────────────────────────────────
+  // ── sync status ──────────────────────────────────────────────────────────
 
-  async syncHooks(): Promise<void> {
-    const hooksDir = this.hooksDirPath();
-    await fs.mkdir(hooksDir, { recursive: true });
-    const sourceDir = this.deps.paths.confPath('claude', 'hooks');
-    for (const name of CLAUDE_HOOK_FILES) {
-      const src = path.join(sourceDir, name);
-      const dst = path.join(hooksDir, name);
-      try {
-        await fs.unlink(dst);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      }
-      await fs.symlink(src, dst);
+  async templateSyncStatus(): Promise<{ synced: boolean; templateExists: boolean; targetExists: boolean }> {
+    const tplRaw = await readFileMaybe(this.templatePath());
+    const targetRaw = await readFileMaybe(this.settingsPath());
+    if (tplRaw === null || targetRaw === null) {
+      return { synced: false, templateExists: tplRaw !== null, targetExists: targetRaw !== null };
     }
+    let tpl: JSONObject;
+    let target: JSONObject;
+    try { tpl = JSON.parse(tplRaw) as JSONObject; } catch { return { synced: false, templateExists: true, targetExists: true }; }
+    try { target = JSON.parse(targetRaw) as JSONObject; } catch { return { synced: false, templateExists: true, targetExists: true }; }
+    return { synced: isJSONSubset(tpl, target), templateExists: true, targetExists: true };
   }
+
+  async globalConfigSyncStatus(): Promise<{ synced: boolean; templateExists: boolean; targetExists: boolean }> {
+    const tplRaw = await readFileMaybe(this.globalConfigTemplatePath());
+    const targetRaw = await readFileMaybe(this.globalConfigPath());
+    if (tplRaw === null || targetRaw === null) {
+      return { synced: false, templateExists: tplRaw !== null, targetExists: targetRaw !== null };
+    }
+    let tpl: JSONObject;
+    let target: JSONObject;
+    try { tpl = JSON.parse(tplRaw) as JSONObject; } catch { return { synced: false, templateExists: true, targetExists: true }; }
+    try { target = JSON.parse(targetRaw) as JSONObject; } catch { return { synced: false, templateExists: true, targetExists: true }; }
+    return { synced: isJSONSubset(tpl, target), templateExists: true, targetExists: true };
+  }
+
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -285,24 +288,51 @@ function autoCompactEnabled(m: JSONObject): boolean {
   return v;
 }
 
-function renderModelEnvEnabled(m: JSONObject): boolean {
-  const v = m.renderModelEnv;
-  if (typeof v !== 'boolean') return true;
-  return v;
-}
-
 function isValidJSON(s: string): boolean {
   try { JSON.parse(s); return true; } catch { return false; }
 }
 
-export function stripModelEnvKeys(content: string): string {
-  let m: JSONObject;
-  try { m = JSON.parse(content) as JSONObject; } catch { return content; }
-  const env = m.env as JSONObject | undefined;
-  if (!env) return content;
-  for (const key of MODEL_ENV_KEYS) delete env[key];
-  m.env = env;
-  return JSON.stringify(m, null, 2);
+async function readFileMaybe(p: string): Promise<string | null> {
+  try { return await fs.readFile(p, 'utf-8'); }
+  catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== 'object') return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((x, i) => deepEqual(x, b[i]));
+  }
+  if (Array.isArray(b)) return false;
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ak = Object.keys(ao);
+  const bk = Object.keys(bo);
+  if (ak.length !== bk.length) return false;
+  return ak.every((k) => deepEqual(ao[k], bo[k]));
+}
+
+function isJSONSubset(template: unknown, target: unknown): boolean {
+  if (template === null || typeof template !== 'object') {
+    return deepEqual(template, target);
+  }
+  if (Array.isArray(template)) {
+    return deepEqual(template, target);
+  }
+  if (target === null || typeof target !== 'object' || Array.isArray(target)) return false;
+  const t = template as Record<string, unknown>;
+  const r = target as Record<string, unknown>;
+  for (const [k, v] of Object.entries(t)) {
+    if (!(k in r)) return false;
+    if (!isJSONSubset(v, r[k])) return false;
+  }
+  return true;
 }
 
 export { ANTHROPIC_KEYS };

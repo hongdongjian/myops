@@ -74,7 +74,7 @@ function AccountRow({ account, onSwitch, onDelete, onRemark, pending }: AccountR
       <div className="space-y-1">
         <div className="flex items-center gap-2">
           <span className="font-mono text-sm">{account.email || account.id}</span>
-          {account.current ? <Badge>当前</Badge> : null}
+          {account.current ? <Badge>Active</Badge> : null}
           {account.planType ? (
             <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{account.planType}</span>
           ) : null}
@@ -82,7 +82,7 @@ function AccountRow({ account, onSwitch, onDelete, onRemark, pending }: AccountR
         <div className="text-xs text-muted-foreground">
           {account.accountName ? `${account.accountName} · ` : ''}
           {account.workspaceTitle ? `${account.workspaceTitle} · ` : ''}
-          创建: {formatTime(account.createdAt)} | 活跃: {formatTime(account.lastUsedAt)}
+          Created: {formatTime(account.createdAt)} | Last active: {formatTime(account.lastUsedAt)}
         </div>
         <div className="flex items-center gap-2 pt-1">
           {editing ? (
@@ -90,28 +90,28 @@ function AccountRow({ account, onSwitch, onDelete, onRemark, pending }: AccountR
               <Input
                 value={remark}
                 onChange={(e) => setRemark(e.target.value)}
-                placeholder="备注"
+                placeholder="Remark"
                 className="h-7 w-48 text-xs"
               />
-              <Button size="sm" onClick={() => { onRemark(account.id, remark); setEditing(false); }} disabled={pending}>保存</Button>
-              <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={pending}>取消</Button>
+              <Button size="sm" onClick={() => { onRemark(account.id, remark); setEditing(false); }} disabled={pending}>Save</Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={pending}>Cancel</Button>
             </>
           ) : (
             <>
-              <span className="text-xs text-muted-foreground">备注: {account.remark || '--'}</span>
-              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>编辑</Button>
+              <span className="text-xs text-muted-foreground">Remark: {account.remark || '--'}</span>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
             </>
           )}
         </div>
       </div>
       <div className="flex gap-2">
         <Button size="sm" onClick={() => onSwitch(account.id)} disabled={account.current || pending}>
-          {account.current ? '已切换' : '切换'}
+          {account.current ? 'Active' : 'Apply'}
         </Button>
         <Button size="sm" variant="destructive"
-          onClick={() => { if (window.confirm(`删除账号 ${account.email || account.id}?`)) onDelete(account.id); }}
+          onClick={() => { if (window.confirm(`Delete account ${account.email || account.id}?`)) onDelete(account.id); }}
           disabled={pending}>
-          删除
+          Delete
         </Button>
       </div>
     </div>
@@ -149,7 +149,7 @@ function OAuthDialog({ open, onOpenChange, onCompleted }: OAuthDialogProps) {
         if (cancelled) return;
         setInfo(r);
         if (r.status === 'completed') { onCompleted(); return; }
-        if (r.status === 'error' || r.status === 'timeout') { setError(r.error || 'OAuth 未完成'); return; }
+        if (r.status === 'error' || r.status === 'timeout') { setError(r.error || 'OAuth not completed'); return; }
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
         return;
@@ -178,19 +178,19 @@ function OAuthDialog({ open, onOpenChange, onCompleted }: OAuthDialogProps) {
     <Dialog open={open} onOpenChange={(o) => { if (!o && loginId) cancel.mutate(); onOpenChange(o); }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Codex OAuth 登录</DialogTitle>
-          <DialogDescription>开始登录后浏览器会弹出 OpenAI 授权页。</DialogDescription>
+          <DialogTitle>Codex OAuth Login</DialogTitle>
+          <DialogDescription>After starting login, an OpenAI authorization page will open in your browser.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 text-sm">
           {!loginId ? (
             <Button onClick={() => start.mutate()} disabled={start.isPending}>
-              {start.isPending ? '启动中...' : '开始登录'}
+              {start.isPending ? 'Starting...' : 'Start Login'}
             </Button>
           ) : info?.status === 'completed' ? (
-            <div className="text-green-500">登录完成: {info.account?.email || ''}</div>
+            <div className="text-green-500">Login completed: {info.account?.email || ''}</div>
           ) : (
             <div className="space-y-2">
-              <div className="text-muted-foreground">状态: {info?.status || '等待中...'}</div>
+              <div className="text-muted-foreground">Status: {info?.status || 'Waiting...'}</div>
               {info?.authUrl ? (
                 <div>
                   <a href={info.authUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">
@@ -214,6 +214,12 @@ export function CodexAccounts() {
     queryFn: () => apiGet<CodexAccountsPayload>('/api/codex/accounts'),
   });
 
+  const applyMut = useMutation({
+    mutationFn: (accountId: string) => apiPost('/api/codex/accounts/apply', { accountId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['codex'] });
+    },
+  });
   const switchMut = useMutation({
     mutationFn: (accountId: string) => apiPost('/api/codex/accounts/switch', { accountId }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['codex'] }),
@@ -234,41 +240,36 @@ export function CodexAccounts() {
 
   const [oauthOpen, setOauthOpen] = useState(false);
   const accounts = data?.accounts ?? [];
-  const pending = switchMut.isPending || deleteMut.isPending || remarkMut.isPending;
+  const pending = applyMut.isPending || switchMut.isPending || deleteMut.isPending || remarkMut.isPending;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2">
-          <span>Codex 账号管理</span>
+          <span>Login Accounts</span>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => importLocal.mutate()} disabled={importLocal.isPending}>
-              {importLocal.isPending ? '导入中...' : '导入本地 auth'}
+              {importLocal.isPending ? 'Importing...' : 'Import local auth'}
             </Button>
-            <Button onClick={() => setOauthOpen(true)}>OAuth 登录</Button>
+            <Button onClick={() => setOauthOpen(true)}>OAuth Login</Button>
           </div>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="text-xs text-muted-foreground">
-          缓存: <code>{data?.cachePath || 'data/codex/accounts.json'}</code> · 写入: <code>{data?.authPath || '~/.codex/auth.json'}</code>
+          Cache: <code>{data?.cachePath || 'data/codex/accounts.json'}</code> · Write: <code>{data?.authPath || '~/.codex/auth.json'}</code>
         </div>
-        {!data?.authMode ? (
-          <div className="rounded border border-amber-500/50 bg-amber-500/10 p-2 text-xs text-amber-600">
-            当前为自定义 baseUrl 模式，账号切换不会生效。请先在「设置」开启账号登录模式。
-          </div>
-        ) : null}
         {isLoading ? (
-          <div className="text-sm text-muted-foreground">加载中...</div>
+          <div className="text-sm text-muted-foreground">Loading...</div>
         ) : accounts.length === 0 ? (
-          <div className="text-sm text-muted-foreground">暂无缓存账号，可通过 OAuth 新增。</div>
+          <div className="text-sm text-muted-foreground">No cached accounts. Add one via OAuth.</div>
         ) : (
           accounts.map((a) => (
             <AccountRow
               key={a.id}
               account={a}
               pending={pending}
-              onSwitch={(id) => switchMut.mutate(id)}
+              onSwitch={(id) => applyMut.mutate(id)}
               onDelete={(id) => deleteMut.mutate(id)}
               onRemark={(accountId, remark) => remarkMut.mutate({ accountId, remark })}
             />

@@ -5,13 +5,13 @@ import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const home = os.homedir();
-const installDir = path.join(home, '.my-ops');
-const plistPath = path.join(home, 'Library/LaunchAgents/com.hongdongjian.my-ops.plist');
+const installDir = path.join(home, '.myops');
+const plistPath = path.join(home, 'Library/LaunchAgents/com.hongdongjian.myops.plist');
 const nodeBin = process.execPath;
 
 if (process.argv.includes('--help')) {
   console.log('usage: tsx scripts/deploy-launchd.ts');
-  console.log('  installs my-ops to ~/.my-ops and registers a launchd agent');
+  console.log('  installs myops to ~/.myops and registers a launchd agent');
   process.exit(0);
 }
 
@@ -25,10 +25,10 @@ const tgz =
 if (tgz) {
   execSync(`npm i --prefix ${installDir} ${tgz}`, { stdio: 'inherit' });
 } else {
-  execSync(`npm i --prefix ${installDir} my-ops@latest`, { stdio: 'inherit' });
+  execSync(`npm i --prefix ${installDir} myops@latest`, { stdio: 'inherit' });
 }
 
-const cliPath = path.join(installDir, 'node_modules/my-ops/dist/cli.js');
+const cliPath = path.join(installDir, 'node_modules/myops/dist/cli.js');
 if (!fs.existsSync(cliPath)) {
   console.error(`cli not found at ${cliPath}`);
   process.exit(1);
@@ -38,13 +38,11 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.hongdongjian.my-ops</string>
+  <key>Label</key><string>com.hongdongjian.myops</string>
   <key>ProgramArguments</key>
   <array>
     <string>${nodeBin}</string>
     <string>${cliPath}</string>
-    <string>--root</string>
-    <string>${installDir}</string>
   </array>
   <key>WorkingDirectory</key><string>${installDir}</string>
   <key>RunAtLoad</key><true/>
@@ -54,6 +52,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>${process.env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin'}</string>
+    ${process.env.GITHUB_API_TOKEN ? `<key>GITHUB_API_TOKEN</key><string>${process.env.GITHUB_API_TOKEN}</string>` : ''}
   </dict>
 </dict>
 </plist>`;
@@ -70,7 +69,7 @@ console.log('logs:', path.join(installDir, 'data'));
 
 function findLatestTarball(dir: string): string | null {
   if (!fs.existsSync(dir)) return null;
-  const files = fs.readdirSync(dir).filter((f) => f.startsWith('my-ops-') && f.endsWith('.tgz'));
+  const files = fs.readdirSync(dir).filter((f) => f.startsWith('myops-') && f.endsWith('.tgz'));
   if (files.length === 0) return null;
   files.sort();
   return path.join(dir, files[files.length - 1]!);

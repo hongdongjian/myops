@@ -43,10 +43,10 @@ describe('MCP page', () => {
 
   it('renders mcp page with action buttons', async () => {
     wrap(<Mcp />);
-    expect(screen.getByText(/小红书 MCP Server/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '启动' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '注册到 Claude' })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText('未启动')).toBeInTheDocument());
+    expect(screen.getByText(/Xiaohongshu MCP Server/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Register to Claude' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Stopped')).toBeInTheDocument());
   });
 
   it('shows MCP log content from log panel', async () => {

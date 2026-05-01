@@ -11,25 +11,31 @@ export const codexAssetsModule = fp<PluginOptions>(async (app, opts) => {
   const service = new CodexAssetsService(opts.deps);
 
   app.get('/api/codex/skills/list', async (): Promise<ApiEnvelope> => {
-    const skills = service.listSkills();
-    return { success: true, data: { skills } };
+    const [skills, others] = await Promise.all([service.listSkills(), service.listOtherSkills()]);
+    return { success: true, data: { skills, others } };
   });
 
   app.post('/api/codex/skills/install', async (req): Promise<ApiEnvelope> => {
     const body = SkillActionRequestSchema.parse(req.body);
-    service.startSkillInstall(body.name);
+    await service.startSkillInstall(body.name);
     return { success: true, message: `skill ${body.name} install started` };
   });
 
   app.post('/api/codex/skills/uninstall', async (req): Promise<ApiEnvelope> => {
     const body = SkillActionRequestSchema.parse(req.body);
-    service.startSkillUninstall(body.name);
+    await service.startSkillUninstall(body.name);
     return { success: true, message: `skill ${body.name} uninstall started` };
   });
 
   app.post('/api/codex/skills/update', async (): Promise<ApiEnvelope> => {
     const message = await service.updateSkills();
     return { success: true, message };
+  });
+
+  app.post('/api/codex/skills/update-single', async (req): Promise<ApiEnvelope> => {
+    const body = SkillActionRequestSchema.parse(req.body);
+    await service.startSkillUpdate(body.name);
+    return { success: true, message: `skill ${body.name} update started` };
   });
 
   app.get<{ Querystring: { name?: string } }>('/api/codex/skills/content', async (req): Promise<ApiEnvelope> => {

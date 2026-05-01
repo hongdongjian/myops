@@ -27,7 +27,7 @@ export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
     if (!cfg.subscribe_url) {
       throw new AppError('CLASH_NO_URL', '请先配置上游订阅 URL', 400);
     }
-    const { info } = await service.getUpstreamCached(cfg.subscribe_url, false);
+    const { info } = await service.getUpstreamCached(cfg, false);
     return { success: true, data: info };
   });
 
@@ -36,16 +36,27 @@ export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
     if (!cfg.subscribe_url) {
       throw new AppError('CLASH_NO_URL', '请先配置上游订阅 URL', 400);
     }
-    const { info } = await service.getUpstreamCached(cfg.subscribe_url, true);
+    const { info } = await service.getUpstreamCached(cfg, true);
     return { success: true, data: info, message: '上游配置已刷新' };
   });
 
-  app.get('/api/clash/subscribe', async (_req, reply) => {
+  app.get('/api/clash/subscribe', async (req, reply) => {
     const cfg = await service.loadConfig();
+    if (cfg.api_key) {
+      const provided = (req.query as Record<string, string>)['api-key'];
+      if (provided !== cfg.api_key) {
+        throw new AppError('CLASH_UNAUTHORIZED', 'invalid or missing api-key', 401);
+      }
+    }
     const merged = await service.buildSubscribe(cfg);
     reply
       .header('Content-Type', 'text/yaml; charset=utf-8')
       .header('Content-Disposition', 'attachment; filename="clash-config.yaml"')
       .send(merged);
+  });
+
+  app.post('/api/clash/subscribe/rotate-key', async (): Promise<ApiEnvelope> => {
+    const newKey = await service.rotateApiKey();
+    return { success: true, data: { api_key: newKey }, message: '订阅密钥已更新' };
   });
 });

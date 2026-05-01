@@ -5,10 +5,10 @@ import { StatusBadge } from './status-badge';
 describe('StatusBadge', () => {
   it('renders running', () => {
     render(<StatusBadge running />);
-    expect(screen.getByText('运行中')).toBeInTheDocument();
+    expect(screen.getByText('Running')).toBeInTheDocument();
   });
   it('renders stopped', () => {
     render(<StatusBadge running={false} />);
-    expect(screen.getByText('未启动')).toBeInTheDocument();
+    expect(screen.getByText('Stopped')).toBeInTheDocument();
   });
 });

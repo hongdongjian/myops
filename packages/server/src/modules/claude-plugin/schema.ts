@@ -5,6 +5,29 @@ export const PluginActionRequestSchema = z.object({
 });
 export type PluginActionRequest = z.infer<typeof PluginActionRequestSchema>;
 
+export const AddPresetRequestSchema = z.object({
+  name: z.string().min(1),
+  package: z.string().min(1),
+  description: z.string().optional(),
+  source: z.string().optional(),
+  link: z.string().optional(),
+});
+export type AddPresetRequest = z.infer<typeof AddPresetRequestSchema>;
+
+export const UpdatePresetRequestSchema = z.object({
+  package: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  source: z.string().optional(),
+  link: z.string().optional(),
+});
+export type UpdatePresetRequest = z.infer<typeof UpdatePresetRequestSchema>;
+
+export const RemovePresetRequestSchema = z.object({
+  package: z.string().min(1),
+});
+export type RemovePresetRequest = z.infer<typeof RemovePresetRequestSchema>;
+
 export interface PluginPresetDefinition {
   name: string;
   description?: string;
@@ -30,6 +53,14 @@ export interface PluginMarketplace {
   repo?: string;
   url?: string;
   installLocation?: string;
+}
+
+export type PluginOpAction = 'installing' | 'enabling' | 'disabling' | 'updating' | 'uninstalling';
+
+export interface PluginActiveOp {
+  package: string;
+  action: PluginOpAction;
+  startedAt: number;
 }
 
 export interface PluginPresetStatus {

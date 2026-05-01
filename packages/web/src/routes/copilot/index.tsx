@@ -1,26 +1,35 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { CopilotConsole } from './console';
+import { useTabParam } from '@/lib/use-tab-param';
+import { CopilotVersion } from './version';
+import { CopilotSettings } from './settings';
 import { CopilotAccounts } from './accounts';
-import { CopilotConfig } from './config';
+import { CopilotLog } from './log';
+
+const TAB_VALUES = ['version', 'settings', 'accounts', 'log'] as const;
 
 export function Copilot() {
+  const [active, setActive] = useTabParam(TAB_VALUES, 'version');
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Copilot</h1>
-      <Tabs defaultValue="console">
+      <Tabs value={active} onValueChange={setActive}>
         <TabsList>
-          <TabsTrigger value="console">控制台</TabsTrigger>
-          <TabsTrigger value="accounts">账号</TabsTrigger>
-          <TabsTrigger value="config">配置</TabsTrigger>
+          <TabsTrigger value="version">Version</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+          <TabsTrigger value="accounts">Accounts</TabsTrigger>
+          <TabsTrigger value="log">Log</TabsTrigger>
         </TabsList>
-        <TabsContent value="console">
-          <CopilotConsole />
+        <TabsContent value="version">
+          <CopilotVersion />
+        </TabsContent>
+        <TabsContent value="settings">
+          <CopilotSettings />
         </TabsContent>
         <TabsContent value="accounts">
           <CopilotAccounts />
         </TabsContent>
-        <TabsContent value="config">
-          <CopilotConfig />
+        <TabsContent value="log">
+          <CopilotLog />
         </TabsContent>
       </Tabs>
     </div>

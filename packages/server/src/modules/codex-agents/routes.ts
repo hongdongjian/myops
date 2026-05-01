@@ -30,4 +30,10 @@ export const codexAgentsModule = fp<PluginOptions>(async (app, opts) => {
     await service.sync();
     return { success: true, message: 'AGENTS.md 已同步' };
   });
+
+  app.post('/api/codex/agents/apply', async (req): Promise<ApiEnvelope> => {
+    const body = CodexAgentsSaveRequestSchema.parse(req.body ?? {});
+    await service.apply(body.content);
+    return { success: true, message: 'AGENTS.md applied' };
+  });
 });

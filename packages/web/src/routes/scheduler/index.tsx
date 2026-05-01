@@ -52,8 +52,8 @@ interface TaskExecution {
 }
 
 const TaskFormSchema = z.object({
-  name: z.string().min(1, '请输入任务名称'),
-  scheduleTime: z.string().min(1, '请输入计划时间，如 09:30'),
+  name: z.string().min(1, 'Task name is required'),
+  scheduleTime: z.string().min(1, 'Schedule time is required (e.g. 09:30)'),
   randomDelay: z.boolean(),
   randomDelayMax: z.number().int().min(0),
   mustSucceedDaily: z.boolean(),
@@ -112,7 +112,7 @@ function TaskDialog({ open, onOpenChange, initial, onSubmit, pending }: TaskDial
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{initial ? '编辑任务' : '新建任务'}</DialogTitle>
+          <DialogTitle>{initial ? 'Edit Task' : 'New Task'}</DialogTitle>
         </DialogHeader>
         <form
           className="space-y-3"
@@ -122,25 +122,25 @@ function TaskDialog({ open, onOpenChange, initial, onSubmit, pending }: TaskDial
         >
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label>名称</Label>
-              <Input {...form.register('name')} placeholder="每日例行" />
+              <Label>Name</Label>
+              <Input {...form.register('name')} placeholder="Daily task" />
               {form.formState.errors.name ? (
                 <div className="text-xs text-destructive">{form.formState.errors.name.message}</div>
               ) : null}
             </div>
             <div className="space-y-1">
-              <Label>计划时间 (HH:MM)</Label>
+              <Label>Schedule time (HH:MM)</Label>
               <Input {...form.register('scheduleTime')} placeholder="09:30" />
               {form.formState.errors.scheduleTime ? (
                 <div className="text-xs text-destructive">{form.formState.errors.scheduleTime.message}</div>
               ) : null}
             </div>
             <div className="space-y-1">
-              <Label>模型</Label>
+              <Label>Model</Label>
               <ModelSelect value={values.model} onChange={(v) => form.setValue('model', v)} />
             </div>
             <div className="space-y-1">
-              <Label>随机延迟 (分钟)</Label>
+              <Label>Random delay (min)</Label>
               <Input
                 type="number"
                 min={0}
@@ -150,15 +150,15 @@ function TaskDialog({ open, onOpenChange, initial, onSubmit, pending }: TaskDial
             </div>
           </div>
           <div className="flex items-center justify-between rounded border border-border p-2">
-            <Label>启用随机延迟</Label>
+            <Label>Enable random delay</Label>
             <Switch checked={values.randomDelay} onCheckedChange={(v) => form.setValue('randomDelay', v)} />
           </div>
           <div className="flex items-center justify-between rounded border border-border p-2">
-            <Label>每日必须成功 (失败重试到当天 23:59)</Label>
+            <Label>Must succeed daily (retry until 23:59)</Label>
             <Switch checked={values.mustSucceedDaily} onCheckedChange={(v) => form.setValue('mustSucceedDaily', v)} />
           </div>
           <div className="flex items-center justify-between rounded border border-border p-2">
-            <Label>启用</Label>
+            <Label>Enable</Label>
             <Switch checked={values.enabled} onCheckedChange={(v) => form.setValue('enabled', v)} />
           </div>
           <div className="space-y-1">
@@ -167,15 +167,15 @@ function TaskDialog({ open, onOpenChange, initial, onSubmit, pending }: TaskDial
               {...form.register('prompt')}
               spellCheck={false}
               className="h-40 w-full resize-y rounded-md border border-border bg-muted/30 p-3 font-mono text-xs"
-              placeholder="输入要发送给 claude 的 prompt"
+              placeholder="Enter prompt to send to Claude"
             />
           </div>
           <DialogFooter className="gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
-              取消
+              Cancel
             </Button>
             <Button type="submit" disabled={pending}>
-              {pending ? '保存中...' : '保存'}
+              {pending ? 'Saving...' : 'Save'}
             </Button>
           </DialogFooter>
         </form>
@@ -213,20 +213,20 @@ function ExecutionsDialog({ taskId, onOpenChange }: ExecutionsDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>执行历史</DialogTitle>
+          <DialogTitle>Execution History</DialogTitle>
         </DialogHeader>
         <div className="space-y-2">
           <div className="max-h-48 overflow-auto rounded border border-border">
             {(data?.executions ?? []).length === 0 ? (
-              <div className="p-3 text-xs text-muted-foreground">暂无执行记录</div>
+              <div className="p-3 text-xs text-muted-foreground">No execution records</div>
             ) : (
               <table className="w-full text-xs">
                 <thead className="bg-muted/50 text-left">
                   <tr>
-                    <th className="px-2 py-1">开始</th>
-                    <th className="px-2 py-1">结束</th>
-                    <th className="px-2 py-1">状态</th>
-                    <th className="px-2 py-1">操作</th>
+                    <th className="px-2 py-1">Start</th>
+                    <th className="px-2 py-1">End</th>
+                    <th className="px-2 py-1">Status</th>
+                    <th className="px-2 py-1">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -236,15 +236,15 @@ function ExecutionsDialog({ taskId, onOpenChange }: ExecutionsDialogProps) {
                       <td className="px-2 py-1 font-mono">{ex.endTime || '--'}</td>
                       <td className="px-2 py-1">
                         {ex.running ? (
-                          <Badge variant="secondary">运行中</Badge>
+                          <Badge variant="secondary">Running</Badge>
                         ) : ex.success ? (
-                          <Badge className="bg-green-600 text-white">成功</Badge>
+                          <Badge className="bg-green-600 text-white">Success</Badge>
                         ) : (
-                          <Badge variant="destructive">失败</Badge>
+                          <Badge variant="destructive">Failed</Badge>
                         )}
                       </td>
                       <td className="px-2 py-1">
-                        <Button size="sm" variant="ghost" onClick={() => setActiveExec(ex.id)}>查看日志</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setActiveExec(ex.id)}>View logs</Button>
                       </td>
                     </tr>
                   ))}
@@ -254,7 +254,7 @@ function ExecutionsDialog({ taskId, onOpenChange }: ExecutionsDialogProps) {
           </div>
           {activeExec ? (
             <ScrollArea className="h-[40vh] rounded border border-border bg-muted/30">
-              <pre className="p-3 font-mono text-xs whitespace-pre-wrap">{logData?.log || '加载中...'}</pre>
+              <pre className="p-3 font-mono text-xs whitespace-pre-wrap">{logData?.log || 'Loading...'}</pre>
             </ScrollArea>
           ) : null}
         </div>
@@ -317,26 +317,26 @@ export function Scheduler() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between gap-2">
-            <span>调度任务</span>
-            <Button onClick={() => { setEditing(null); setDialogOpen(true); }}>新建任务</Button>
+            <span>Scheduled Tasks</span>
+            <Button onClick={() => { setEditing(null); setDialogOpen(true); }}>New Task</Button>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          {isLoading ? <div className="text-xs text-muted-foreground">加载中...</div> : null}
+          {isLoading ? <div className="text-xs text-muted-foreground">Loading...</div> : null}
           {!isLoading && tasks.length === 0 ? (
-            <div className="text-sm text-muted-foreground">暂无任务，点击「新建任务」添加。</div>
+            <div className="text-sm text-muted-foreground">No tasks. Click "New Task" to add one.</div>
           ) : null}
           {tasks.length > 0 ? (
             <table className="w-full text-sm">
               <thead className="text-left text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-2 py-1">名称</th>
-                  <th className="px-2 py-1">时间</th>
-                  <th className="px-2 py-1">模型</th>
-                  <th className="px-2 py-1">下次运行</th>
-                  <th className="px-2 py-1">最近</th>
-                  <th className="px-2 py-1">状态</th>
-                  <th className="px-2 py-1">操作</th>
+                  <th className="px-2 py-1">Name</th>
+                  <th className="px-2 py-1">Time</th>
+                  <th className="px-2 py-1">Model</th>
+                  <th className="px-2 py-1">Next run</th>
+                  <th className="px-2 py-1">Recent</th>
+                  <th className="px-2 py-1">Status</th>
+                  <th className="px-2 py-1">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -345,7 +345,7 @@ export function Scheduler() {
                     <td className="px-2 py-2 font-medium">{t.name}</td>
                     <td className="px-2 py-2 font-mono text-xs">
                       {t.scheduleTime || '--'}
-                      {t.randomDelay ? <span className="ml-1 text-muted-foreground">+随机{t.randomDelayMax}m</span> : null}
+                      {t.randomDelay ? <span className="ml-1 text-muted-foreground">+rnd{t.randomDelayMax}m</span> : null}
                     </td>
                     <td className="px-2 py-2 font-mono text-xs">{t.model || '--'}</td>
                     <td className="px-2 py-2 font-mono text-xs">{t.nextRunAt || '--'}</td>
@@ -353,22 +353,22 @@ export function Scheduler() {
                     <td className="px-2 py-2 text-xs">
                       <div className="flex items-center gap-1">
                         {t.enabled ? (
-                          <Badge className="bg-green-600 text-white">启用</Badge>
+                          <Badge className="bg-green-600 text-white">Enabled</Badge>
                         ) : (
-                          <Badge variant="secondary">禁用</Badge>
+                          <Badge variant="secondary">Disabled</Badge>
                         )}
                         {t.status ? <span className="text-muted-foreground">{t.status}</span> : null}
                       </div>
                     </td>
                     <td className="px-2 py-2">
                       <div className="flex flex-wrap gap-1">
-                        <Button size="sm" variant="outline" onClick={() => runNow.mutate(t.id)} disabled={runNow.isPending}>立即运行</Button>
+                        <Button size="sm" variant="outline" onClick={() => runNow.mutate(t.id)} disabled={runNow.isPending}>Run now</Button>
                         <Button size="sm" variant="outline" onClick={() => enable.mutate({ id: t.id, enabled: !t.enabled })}>
-                          {t.enabled ? '禁用' : '启用'}
+                          {t.enabled ? 'Disable' : 'Enable'}
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setLogTaskId(t.id)}>日志</Button>
-                        <Button size="sm" variant="ghost" onClick={() => { setEditing(t); setDialogOpen(true); }}>编辑</Button>
-                        <Button size="sm" variant="destructive" onClick={() => { if (window.confirm(`删除任务 ${t.name}?`)) del.mutate(t.id); }}>删除</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setLogTaskId(t.id)}>Logs</Button>
+                        <Button size="sm" variant="ghost" onClick={() => { setEditing(t); setDialogOpen(true); }}>Edit</Button>
+                        <Button size="sm" variant="destructive" onClick={() => { if (window.confirm(`Delete task ${t.name}?`)) del.mutate(t.id); }}>Delete</Button>
                       </div>
                     </td>
                   </tr>

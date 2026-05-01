@@ -1,12 +1,12 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { Mutex } from 'async-mutex';
 import type { Deps } from '../../deps.js';
 import { AppError } from '../../core/errors.js';
 import type { ClashConfig, ClashUpstreamInfo } from './schema.js';
 
-export const CLASH_UPSTREAM_CACHE_TTL_MS = 5 * 60 * 1000;
 export const CLASH_FETCH_TIMEOUT_MS = 30 * 1000;
 
 interface UpstreamCacheEntry {
@@ -31,7 +31,7 @@ export class ClashService {
       return JSON.parse(data) as ClashConfig;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { subscribe_url: '', groups: [], rule_sets: [] };
+        return { subscribe_url: '', refresh_interval_minutes: 60, groups: [], rule_sets: [] };
       }
       throw new AppError('CLASH_CONFIG_READ', `failed to read clash config: ${(err as Error).message}`, 500);
     }
@@ -42,30 +42,39 @@ export class ClashService {
     await fsp.writeFile(this.configPath(), JSON.stringify(cfg, null, 2));
   }
 
-  async getUpstreamCached(subscribeURL: string, forceRefresh: boolean): Promise<{ raw: string; info: ClashUpstreamInfo }> {
+  async getUpstreamCached(cfg: ClashConfig, forceRefresh: boolean): Promise<{ raw: string; info: ClashUpstreamInfo }> {
+    const ttlMs = (cfg.refresh_interval_minutes ?? 60) * 60 * 1000;
     const release = await this.cacheMu.acquire();
     try {
       if (
         !forceRefresh &&
         this.cache &&
-        Date.now() - this.cache.fetchedAt < CLASH_UPSTREAM_CACHE_TTL_MS
+        Date.now() - this.cache.fetchedAt < ttlMs
       ) {
-        return { raw: this.cache.raw, info: this.cache.info };
+        return { raw: this.cache.raw, info: { ...this.cache.info, fetchedAt: this.cache.fetchedAt } };
       }
-      const raw = await fetchUpstreamRaw(subscribeURL);
+      const raw = await fetchUpstreamRaw(cfg.subscribe_url);
       const info = parseUpstreamInfo(raw);
-      this.cache = { fetchedAt: Date.now(), raw, info };
-      return { raw, info };
+      const fetchedAt = Date.now();
+      this.cache = { fetchedAt, raw, info };
+      return { raw, info: { ...info, fetchedAt } };
     } finally {
       release();
     }
+  }
+
+  async rotateApiKey(): Promise<string> {
+    const cfg = await this.loadConfig();
+    const newKey = crypto.randomBytes(24).toString('hex');
+    await this.saveConfig({ ...cfg, api_key: newKey });
+    return newKey;
   }
 
   async buildSubscribe(cfg: ClashConfig): Promise<string> {
     if (!cfg.subscribe_url) {
       throw new AppError('CLASH_NO_URL', 'subscribe URL not configured', 400);
     }
-    const { raw } = await this.getUpstreamCached(cfg.subscribe_url, false);
+    const { raw } = await this.getUpstreamCached(cfg, false);
     return mergeClashConfig(raw, cfg);
   }
 }
@@ -120,21 +129,52 @@ export function parseUpstreamInfo(raw: string): ClashUpstreamInfo {
 
 export function mergeClashConfig(upstreamRaw: string, cfg: ClashConfig): string {
   const doc = (YAML.parse(upstreamRaw) ?? {}) as Record<string, unknown>;
+  const upstreamProxyNames: string[] = [];
+  if (Array.isArray(doc.proxies)) {
+    for (const p of doc.proxies as unknown[]) {
+      if (p && typeof p === 'object' && typeof (p as any).name === 'string') {
+        upstreamProxyNames.push((p as any).name);
+      }
+    }
+  }
 
   if (cfg.groups.length > 0) {
     const existing = Array.isArray(doc['proxy-groups']) ? (doc['proxy-groups'] as unknown[]) : [];
-    const additions = cfg.groups.map((g) => ({
-      name: g.name,
-      type: g.type,
-      proxies: [...g.proxies],
-    }));
-    doc['proxy-groups'] = [...existing, ...additions];
+    const additions = cfg.groups.map((g) => {
+      const proxies =
+        g.keywords && g.keywords.length > 0
+          ? upstreamProxyNames.filter((name) =>
+              g.keywords.some((kw) => name.toLowerCase().includes(kw.toLowerCase())),
+            )
+          : [...g.proxies];
+      const entry: Record<string, unknown> = { name: g.name, type: g.type, proxies };
+      if (g.url) entry.url = g.url;
+      if (g.interval !== undefined) entry.interval = g.interval;
+      if (g.timeout !== undefined) entry.timeout = g.timeout;
+      if (g.tolerance !== undefined) entry.tolerance = g.tolerance;
+      if (g.lazy !== undefined) entry.lazy = g.lazy;
+      if (g.max_failed_times !== undefined) entry['max-failed-times'] = g.max_failed_times;
+      if (g.strategy) entry.strategy = g.strategy;
+      return entry;
+    });
+    const injected = existing.map((eg) => {
+      if (eg && typeof eg === 'object' && (eg as any).type === 'select' && Array.isArray((eg as any).proxies)) {
+        const upstreamName: string = (eg as any).name ?? '';
+        const groupsToInject = cfg.groups
+          .filter((g) => g.inject_into?.length && g.inject_into.includes(upstreamName))
+          .map((g) => g.name);
+        return { ...(eg as object), proxies: [...groupsToInject, ...(eg as any).proxies] };
+      }
+      return eg;
+    });
+    doc['proxy-groups'] = [...injected, ...additions];
   }
 
   if (cfg.rule_sets.length > 0) {
     const existing = Array.isArray(doc.rules) ? (doc.rules as unknown[]) : [];
     const customRules: string[] = [];
     for (const rs of cfg.rule_sets) {
+      if (rs.enabled === false) continue;
       for (const rule of rs.rules) customRules.push(`${rule},${rs.group}`);
     }
     doc.rules = [...customRules, ...existing];

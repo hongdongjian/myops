@@ -62,6 +62,11 @@ export interface AutostartState {
   enabled: boolean;
 }
 
+export interface PortState {
+  port: number;
+  restarted?: boolean;
+}
+
 export interface ConfigPayload {
   path: string;
   content: string;

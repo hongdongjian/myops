@@ -37,6 +37,11 @@ export const codexSettingsModule = fp<PluginOptions>(async (app, opts) => {
     return { success: true, data };
   });
 
+  app.get('/api/codex/settings/template/sync-status', async (): Promise<ApiEnvelope> => {
+    const data = await service.templateSyncStatus();
+    return { success: true, data };
+  });
+
   app.post('/api/codex/settings/template/save', async (req): Promise<ApiEnvelope> => {
     const body = CodexSettingsTemplateSaveRequestSchema.parse(req.body ?? {});
     await service.saveTemplate(body.content);

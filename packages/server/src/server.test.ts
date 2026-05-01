@@ -14,7 +14,6 @@ function makeDeps() {
   const store = new StateStore(paths.dataPath('state.json'));
   const processMgr = new ProcessManager(store, paths.dataPath('logs'));
   return {
-    config: Object.freeze({ port: 0, models: ['m1', 'm2'] }) as any,
     paths,
     runner: new Runner(),
     store,
@@ -23,11 +22,9 @@ function makeDeps() {
 }
 
 describe('buildApp', () => {
-  it('serves health and models', async () => {
+  it('serves health', async () => {
     const app = await buildApp(makeDeps());
     const h = await app.inject({ method: 'GET', url: '/api/health' });
     expect(h.json()).toEqual({ ok: true });
-    const m = await app.inject({ method: 'GET', url: '/api/server/models' });
-    expect(m.json()).toEqual({ models: ['m1', 'm2'] });
   });
 });

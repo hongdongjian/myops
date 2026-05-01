@@ -56,7 +56,7 @@ describe('clash service', () => {
     const { deps } = makeDeps();
     const svc = new ClashService(deps);
     const cfg = await svc.loadConfig();
-    expect(cfg).toEqual({ subscribe_url: '', groups: [], rule_sets: [] });
+    expect(cfg).toEqual({ subscribe_url: '', refresh_interval_minutes: 60, groups: [], rule_sets: [] });
   });
 
   it('saveConfig + loadConfig roundtrip', async () => {

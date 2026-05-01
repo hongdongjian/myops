@@ -1,13 +1,66 @@
+# ── Build outputs ─────────────────────────────────────────────────────────────
 node_modules/
 dist/
-.DS_Store
-*.log
-data/
-packages/server/dist/
-packages/server/conf/
-packages/web/dist/
 dist-pack/
-packages/server/*.tgz
 .vite/
 coverage/
 *.tsbuildinfo
+packages/server/dist/
+packages/web/dist/
+packages/server/*.tgz
+
+# ── Runtime / data ────────────────────────────────────────────────────────────
+data/
+conf/
+packages/server/conf/
+*.log
+*.log.*
+
+# ── Secrets & credentials ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert
+*.crt
+*_rsa
+*_ed25519
+auth.json
+*token*
+*secret*
+
+# ── Archives ──────────────────────────────────────────────────────────────────
+*.tgz
+*.tar.gz
+*.zip
+*.dmg
+*.pkg
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.orig
+.project
+.classpath
+.settings/
+
+# ── Temp ──────────────────────────────────────────────────────────────────────
+tmp/
+temp/
+.tmp/

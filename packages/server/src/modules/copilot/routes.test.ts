@@ -74,7 +74,7 @@ describe('copilot routes', () => {
     const r = await app.inject({ method: 'GET', url: '/api/copilot/proxy' });
     const body = r.json();
     expect(body.success).toBe(true);
-    expect(body.data.proxyURL).toBe('http://127.0.0.1:7897');
+    expect(body.data.proxyURL).toBe('');
     expect(body.data.enabled).toBe(false);
   });
 

@@ -2,13 +2,16 @@ import { z } from 'zod';
 
 export const CreateTaskRequestSchema = z.object({
   name: z.string().min(1),
-  scheduleTime: z.string().default(''),
-  randomDelay: z.boolean().default(false),
-  randomDelayMax: z.number().int().min(0).default(0),
-  mustSucceedDaily: z.boolean().default(false),
-  model: z.string().default(''),
-  prompt: z.string().default(''),
+  command: z.string().default(''),
   enabled: z.boolean().default(false),
+  scheduleType: z.enum(['once', 'interval', 'periodic']).default('periodic'),
+  runAt: z.string().default(''),
+  intervalSeconds: z.number().int().min(1).default(60),
+  scheduleTime: z.string().default(''),
+  intervalDays: z.number().int().min(1).default(1),
+  randomDelaySeconds: z.number().int().min(0).default(0),
+  retryCount: z.number().int().min(0).default(1),
+  retryIntervalSeconds: z.number().int().min(0).default(0),
 });
 export type CreateTaskRequest = z.infer<typeof CreateTaskRequestSchema>;
 
@@ -29,16 +32,19 @@ export interface ScheduledTask {
   id: string;
   name: string;
   enabled: boolean;
-  scheduleTime: string;
-  randomDelay: boolean;
-  randomDelayMax: number;
-  mustSucceedDaily: boolean;
-  model: string;
-  prompt: string;
+  command: string;
   status: string;
+  scheduleType: 'once' | 'interval' | 'periodic';
+  runAt?: string;
+  intervalSeconds?: number;
+  scheduleTime?: string;
+  intervalDays?: number;
+  randomDelaySeconds?: number;
+  retryCount?: number;
+  retryIntervalSeconds?: number;
+  retryAttempts?: number;
   nextRunAt?: string;
   lastRunAt?: string;
-  lastSuccessDate?: string;
 }
 
 export interface TaskExecution {

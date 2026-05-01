@@ -5,10 +5,12 @@ import {
   CodexSwitchAccountRequestSchema,
   CodexDeleteAccountRequestSchema,
   CodexAccountRemarkSaveRequestSchema,
+  CodexAccountEditRequestSchema,
   CodexOAuthCancelRequestSchema,
   type ApiEnvelope,
 } from './schema.js';
 import { CodexAccountsService, buildAccountView } from './service.js';
+import { CodexSettingsService } from '../codex-settings/service.js';
 import { AppError } from '../../core/errors.js';
 
 interface PluginOptions {
@@ -24,6 +26,7 @@ function isForceRefresh(query: unknown): boolean {
 export const codexAccountsModule = fp<PluginOptions>(async (app, opts) => {
   const service = (opts.deps.codexAccounts as CodexAccountsService | undefined)
     ?? new CodexAccountsService(opts.deps);
+  const settingsService = new CodexSettingsService(opts.deps);
   // Ensure deps.codexAccounts is set so other modules (codex-settings) can call the hook.
   if (!opts.deps.codexAccounts) {
     opts.deps.codexAccounts = service;
@@ -60,6 +63,19 @@ export const codexAccountsModule = fp<PluginOptions>(async (app, opts) => {
     return { success: true, message: `switched to ${account.email}`, data: payload };
   });
 
+  app.post('/api/codex/accounts/apply', async (req): Promise<ApiEnvelope> => {
+    const body = CodexSwitchAccountRequestSchema.parse(req.body ?? {});
+    const accountId = body.accountId.trim();
+    if (accountId === '') throw new AppError('INVALID_INPUT', 'accountId is required', 400);
+    const account = await service.prepareAccountForSwitch(accountId);
+    await service.writeCurrentAuth(account);
+    await settingsService.setAuthMode({ enabled: true, baseUrl: '', apiKey: '' });
+    if (account.model) await settingsService.setModel(account.model);
+    const payload = await service.buildPayload(true);
+    payload['switchedAccount'] = buildAccountView(account, account.id);
+    return { success: true, message: `applied login mode with ${account.email}`, data: payload };
+  });
+
   app.post('/api/codex/accounts/delete', async (req): Promise<ApiEnvelope> => {
     const body = CodexDeleteAccountRequestSchema.parse(req.body ?? {});
     const accountId = body.accountId.trim();
@@ -77,6 +93,24 @@ export const codexAccountsModule = fp<PluginOptions>(async (app, opts) => {
     const payload = await service.buildPayload(true);
     payload['remarkedAccount'] = buildAccountView(account, (payload['currentAccountId'] as string) ?? '');
     return { success: true, message: 'codex account remark saved', data: payload };
+  });
+
+  app.post('/api/codex/accounts/edit', async (req): Promise<ApiEnvelope> => {
+    const body = CodexAccountEditRequestSchema.parse(req.body ?? {});
+    const accountId = body.accountId.trim();
+    if (accountId === '') throw new AppError('INVALID_INPUT', 'accountId is required', 400);
+    const account = await service.saveAccountEdit(accountId, body.remark, body.model);
+    const payload = await service.buildPayload(true);
+    payload['editedAccount'] = buildAccountView(account, (payload['currentAccountId'] as string) ?? '');
+    return { success: true, message: 'codex account updated', data: payload };
+  });
+
+  app.get('/api/codex/accounts/quota', async (req): Promise<ApiEnvelope> => {
+    const q = (req.query as Record<string, unknown> | undefined) ?? {};
+    const accountId = String(q['accountId'] ?? '').trim();
+    if (accountId === '') throw new AppError('INVALID_INPUT', 'accountId is required', 400);
+    const view = await service.refreshQuota(accountId);
+    return { success: true, data: view };
   });
 
   app.post('/api/codex/accounts/oauth/start', async (): Promise<ApiEnvelope> => {

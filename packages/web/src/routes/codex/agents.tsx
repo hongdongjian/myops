@@ -4,6 +4,7 @@ import { apiGet, apiPost } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { useToast } from '@/components/toast';
 
 interface AgentsPayload {
   path: string;
@@ -19,6 +20,7 @@ interface SyncStatusPayload {
 
 export function CodexAgents() {
   const qc = useQueryClient();
+  const toast = useToast();
   const { data, isLoading } = useQuery<AgentsPayload>({
     queryKey: ['codex', 'agents'],
     queryFn: () => apiGet<AgentsPayload>('/api/codex/agents'),
@@ -30,8 +32,6 @@ export function CodexAgents() {
   });
 
   const [content, setContent] = useState('');
-  const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
 
   useEffect(() => {
     if (data) setContent(data.content ?? '');
@@ -40,21 +40,19 @@ export function CodexAgents() {
   const save = useMutation({
     mutationFn: (text: string) => apiPost('/api/codex/agents/save', { content: text }),
     onSuccess: () => {
-      setNotice('已保存');
-      setError('');
+      toast.success('Saved');
       qc.invalidateQueries({ queryKey: ['codex', 'agents'] });
       qc.invalidateQueries({ queryKey: ['codex', 'agents', 'sync-status'] });
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
   const sync = useMutation({
     mutationFn: () => apiPost('/api/codex/agents/sync'),
     onSuccess: () => {
-      setNotice('已同步到 ~/.codex/AGENTS.md');
-      setError('');
+      toast.success('Synced to ~/.codex/AGENTS.md');
       qc.invalidateQueries({ queryKey: ['codex', 'agents', 'sync-status'] });
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
 
   return (
@@ -82,8 +80,6 @@ export function CodexAgents() {
           className="h-[480px] w-full resize-y rounded-md border border-border bg-muted/30 p-3 font-mono text-xs"
           placeholder={isLoading ? '加载中...' : '在此填写 AGENTS.md 内容'}
         />
-        {notice ? <div className="text-xs text-green-500">{notice}</div> : null}
-        {error ? <div className="text-xs text-destructive">{error}</div> : null}
         <div className="flex gap-2">
           <Button onClick={() => save.mutate(content)} disabled={save.isPending}>
             {save.isPending ? '保存中...' : '保存'}

@@ -1,13 +1,20 @@
 import fp from 'fastify-plugin';
+import NodeCache from 'node-cache';
+import { fetch, EnvHttpProxyAgent } from 'undici';
 import type { Deps } from '../../deps.js';
 import { CopilotService } from './service.js';
 import {
   ConfigSaveRequestSchema,
   AutostartSetRequestSchema,
   ProxySetRequestSchema,
+  PortSetRequestSchema,
   LogsQuerySchema,
   type ApiEnvelope,
 } from './schema.js';
+
+const RELEASES_URL = 'https://api.github.com/repos/caozhiyuan/copilot-api/releases';
+const releasesCache = new NodeCache({ stdTTL: 5 * 60 });
+const proxyAgent = new EnvHttpProxyAgent();
 
 interface CopilotPluginOptions {
   deps: Deps;
@@ -54,6 +61,32 @@ export const copilotModule = fp<CopilotPluginOptions>(async (app, opts) => {
     return result;
   });
 
+  app.get('/api/copilot/version', async (): Promise<ApiEnvelope> => {
+    const data = await service.resolveVersionStatus();
+    return { success: true, data };
+  });
+
+  app.get('/api/copilot/releases', async (_req, reply): Promise<ApiEnvelope> => {
+    const cached = releasesCache.get<unknown[]>('data');
+    if (cached !== undefined) return { success: true, data: cached };
+    try {
+      const headers: Record<string, string> = {
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+      const githubToken = process.env['GITHUB_API_TOKEN'];
+      if (githubToken) headers['Authorization'] = `Bearer ${githubToken}`;
+      const res = await fetch(RELEASES_URL, { dispatcher: proxyAgent, headers });
+      if (!res.ok) { reply.status(502); return { success: false, error: `GitHub returned ${res.status}` }; }
+      const data = await res.json() as unknown[];
+      releasesCache.set('data', data);
+      return { success: true, data };
+    } catch (err) {
+      reply.status(502);
+      return { success: false, error: (err as Error).message };
+    }
+  });
+
   app.get('/api/copilot/logs', async (req): Promise<ApiEnvelope> => {
     const { lines } = LogsQuerySchema.parse(req.query ?? {});
     const data = await service.readLogs(lines);
@@ -71,6 +104,16 @@ export const copilotModule = fp<CopilotPluginOptions>(async (app, opts) => {
   app.get('/api/copilot/usage', async (): Promise<ApiEnvelope> => {
     const usage = await service.fetchUsage();
     return { success: true, data: usage };
+  });
+
+  app.get('/api/copilot/models', async (_req, reply): Promise<ApiEnvelope> => {
+    try {
+      const models = await service.fetchModels();
+      return { success: true, data: models };
+    } catch (err) {
+      reply.status(502);
+      return { success: false, error: (err as Error).message };
+    }
   });
 
   app.get('/api/copilot/config', async (): Promise<ApiEnvelope> => {
@@ -119,6 +162,16 @@ export const copilotModule = fp<CopilotPluginOptions>(async (app, opts) => {
   app.post('/api/copilot/proxy/set', async (req): Promise<ApiEnvelope> => {
     const body = ProxySetRequestSchema.parse(req.body);
     const data = await service.setProxy(body.enabled);
+    return { success: true, data };
+  });
+
+  app.get('/api/copilot/port', async (): Promise<ApiEnvelope> => {
+    return { success: true, data: service.getPort() };
+  });
+
+  app.post('/api/copilot/port/set', async (req): Promise<ApiEnvelope> => {
+    const body = PortSetRequestSchema.parse(req.body);
+    const data = await service.setPort(body.port);
     return { success: true, data };
   });
 });

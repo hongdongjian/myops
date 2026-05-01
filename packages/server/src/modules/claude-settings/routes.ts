@@ -4,9 +4,9 @@ import { ClaudeSettingsService } from './service.js';
 import {
   SettingsSaveRequestSchema,
   AutoCompactSetRequestSchema,
-  RenderModelEnvSetRequestSchema,
   SettingsTemplateSaveRequestSchema,
   PowerlineSaveRequestSchema,
+  GlobalConfigSaveRequestSchema,
   type ApiEnvelope,
 } from './schema.js';
 
@@ -34,14 +34,13 @@ export const claudeSettingsModule = fp<PluginOptions>(async (app, opts) => {
     return { success: true, data: { enabled: body.enabled } };
   });
 
-  app.post('/api/claude/settings/render-model-env/set', async (req): Promise<ApiEnvelope> => {
-    const body = RenderModelEnvSetRequestSchema.parse(req.body);
-    await service.setRenderModelEnv(body.enabled);
-    return { success: true, data: { enabled: body.enabled } };
-  });
-
   app.get('/api/claude/settings/template', async (): Promise<ApiEnvelope> => {
     const data = await service.getTemplate();
+    return { success: true, data };
+  });
+
+  app.get('/api/claude/settings/template/sync-status', async (): Promise<ApiEnvelope> => {
+    const data = await service.templateSyncStatus();
     return { success: true, data };
   });
 
@@ -70,5 +69,21 @@ export const claudeSettingsModule = fp<PluginOptions>(async (app, opts) => {
     const body = PowerlineSaveRequestSchema.parse(req.body);
     await service.savePowerline(body.content);
     return { success: true, message: 'powerline config saved' };
+  });
+
+  app.get('/api/claude/global-config', async (): Promise<ApiEnvelope> => {
+    const data = await service.getGlobalConfig();
+    return { success: true, data };
+  });
+
+  app.get('/api/claude/global-config/sync-status', async (): Promise<ApiEnvelope> => {
+    const data = await service.globalConfigSyncStatus();
+    return { success: true, data };
+  });
+
+  app.post('/api/claude/global-config/save', async (req): Promise<ApiEnvelope> => {
+    const body = GlobalConfigSaveRequestSchema.parse(req.body);
+    await service.saveGlobalConfig(body.content);
+    return { success: true, message: 'global config saved' };
   });
 });

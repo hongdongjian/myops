@@ -7,8 +7,14 @@ export const CodexAccountRemarkSaveRequestSchema = z.object({
   accountId: z.string(),
   remark: z.string().default(''),
 });
-export const CodexOAuthCancelRequestSchema = z.object({ loginId: z.string().default('') });
+export const CodexAccountEditRequestSchema = z.object({
+  accountId: z.string(),
+  remark: z.string().default(''),
+  model: z.string().default(''),
+});
+export type CodexAccountEditRequest = z.infer<typeof CodexAccountEditRequestSchema>;
 
+export const CodexOAuthCancelRequestSchema = z.object({ loginId: z.string() });
 export type CodexImportJSONRequest = z.infer<typeof CodexImportJSONRequestSchema>;
 export type CodexSwitchAccountRequest = z.infer<typeof CodexSwitchAccountRequestSchema>;
 export type CodexDeleteAccountRequest = z.infer<typeof CodexDeleteAccountRequestSchema>;
@@ -47,6 +53,7 @@ export interface CodexStoredAccount {
   email: string;
   userId?: string;
   remark?: string;
+  model?: string;
   planType?: string;
   accountId?: string;
   organizationId?: string;
@@ -72,6 +79,7 @@ export interface CodexAccountView {
   email: string;
   userId?: string;
   remark?: string;
+  model?: string;
   planType?: string;
   accountId?: string;
   organizationId?: string;

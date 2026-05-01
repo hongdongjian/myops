@@ -10,11 +10,18 @@
     "build": "npm -w packages/web run build && npm -w packages/server run build && tsx scripts/postbuild.ts",
     "test": "npm -w packages/server run test && npm -w packages/web run test",
     "lint": "eslint packages --ext .ts,.tsx",
-    "typecheck": "tsc -b packages/server packages/web --noEmit"
+    "typecheck": "tsc -b packages/server packages/web --noEmit",
+    "pack": "npm run build && npm pack --pack-destination dist-pack -w packages/server",
+    "publish": "npm run build && npm publish -w packages/server",
+    "install": "npm install -g ./packages/server",
+    "uninstall": "npm uninstall -g myops",
+    "link": "npm -w packages/server link",
+    "unlink": "npm -w packages/server unlink"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "concurrently": "^8.2.2",
+    "esbuild": "^0.25.0",
     "eslint": "^8.57.0",
     "@typescript-eslint/parser": "^7.7.0",
     "@typescript-eslint/eslint-plugin": "^7.7.0",

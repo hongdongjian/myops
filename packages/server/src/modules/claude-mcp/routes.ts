@@ -5,6 +5,9 @@ import {
   MCPAddRequestSchema,
   MCPRemoveRequestSchema,
   MCPPresetActionRequestSchema,
+  MCPPresetCreateRequestSchema,
+  MCPPresetDeleteRequestSchema,
+  MCPPresetUpdateRequestSchema,
   type ApiEnvelope,
 } from './schema.js';
 
@@ -54,5 +57,23 @@ export const claudeMCPModule = fp<PluginOptions>(async (app, opts) => {
       error: r.ok ? undefined : r.error,
       data: { name: r.name, scope: r.scope, stdout: r.stdout, stderr: r.stderr },
     };
+  });
+
+  app.post('/api/claude/mcp/preset/create', async (req, reply): Promise<ApiEnvelope> => {
+    const body = MCPPresetCreateRequestSchema.parse(req.body);
+    await service.createPreset(body);
+    return { success: true };
+  });
+
+  app.post('/api/claude/mcp/preset/delete', async (req, reply): Promise<ApiEnvelope> => {
+    const body = MCPPresetDeleteRequestSchema.parse(req.body);
+    await service.deletePreset(body.name);
+    return { success: true };
+  });
+
+  app.post('/api/claude/mcp/preset/update', async (req, reply): Promise<ApiEnvelope> => {
+    const body = MCPPresetUpdateRequestSchema.parse(req.body);
+    const result = await service.updatePreset(body);
+    return { success: true, data: result };
   });
 });

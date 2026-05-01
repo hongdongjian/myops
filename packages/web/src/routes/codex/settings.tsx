@@ -1,20 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { ModelSelect } from '@/components/model-select';
-
-interface CodexSettingsPayload {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  authMode: boolean;
-  path: string;
-}
+import { Badge } from '@/components/ui/badge';
+import { useToast } from '@/components/toast';
 
 interface CodexTemplatePayload {
   content: string;
@@ -22,120 +12,177 @@ interface CodexTemplatePayload {
   exists: boolean;
 }
 
+interface AgentsPayload {
+  path: string;
+  syncedPath: string;
+  content: string;
+  exists: boolean;
+}
+
+interface TemplateSyncStatusPayload {
+  synced: boolean;
+  templateExists: boolean;
+  targetExists: boolean;
+}
+
+interface AgentsSyncStatusPayload {
+  synced: boolean;
+  localExists: boolean;
+}
+
+function SyncBadge({ status }: { status?: { synced: boolean } }) {
+  if (!status) return null;
+  if (status.synced) return <Badge className="bg-green-600 text-white">Applied</Badge>;
+  return <Badge variant="secondary">Out of sync</Badge>;
+}
+
 export function CodexSettings() {
   const qc = useQueryClient();
-  const { data } = useQuery<CodexSettingsPayload>({
-    queryKey: ['codex', 'settings'],
-    queryFn: () => apiGet<CodexSettingsPayload>('/api/codex/settings'),
-  });
+  const toast = useToast();
   const { data: tpl } = useQuery<CodexTemplatePayload>({
     queryKey: ['codex', 'settings', 'template'],
     queryFn: () => apiGet<CodexTemplatePayload>('/api/codex/settings/template'),
   });
+  const { data: tplSync } = useQuery<TemplateSyncStatusPayload>({
+    queryKey: ['codex', 'settings', 'template', 'sync-status'],
+    queryFn: () => apiGet<TemplateSyncStatusPayload>('/api/codex/settings/template/sync-status'),
+    refetchInterval: 5000,
+  });
+  const { data: agents, isLoading: agentsLoading } = useQuery<AgentsPayload>({
+    queryKey: ['codex', 'agents'],
+    queryFn: () => apiGet<AgentsPayload>('/api/codex/agents'),
+  });
+  const { data: agentsSync } = useQuery<AgentsSyncStatusPayload>({
+    queryKey: ['codex', 'agents', 'sync-status'],
+    queryFn: () => apiGet<AgentsSyncStatusPayload>('/api/codex/agents/sync-status'),
+    refetchInterval: 5000,
+  });
 
-  const [baseUrl, setBaseUrl] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('');
   const [tplContent, setTplContent] = useState('');
-  const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
+  const [agentsContent, setAgentsContent] = useState('');
 
-  useEffect(() => {
-    if (data) {
-      setBaseUrl(data.baseUrl ?? '');
-      setApiKey(data.apiKey ?? '');
-      setModel(data.model ?? '');
-    }
-  }, [data]);
   useEffect(() => {
     if (tpl) setTplContent(tpl.content ?? '');
   }, [tpl]);
+  useEffect(() => {
+    if (agents) setAgentsContent(agents.content ?? '');
+  }, [agents]);
 
-  const save = useMutation({
-    mutationFn: () => apiPost('/api/codex/settings/save', { baseUrl, apiKey, model }),
-    onSuccess: () => {
-      setNotice('已保存');
-      setError('');
-      qc.invalidateQueries({ queryKey: ['codex', 'settings'] });
-    },
-    onError: (e: Error) => setError(e.message),
-  });
-  const setAuthMode = useMutation({
-    mutationFn: (enabled: boolean) =>
-      apiPost('/api/codex/settings/auth-mode/set', { enabled, baseUrl, apiKey }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['codex', 'settings'] }),
-    onError: (e: Error) => setError(e.message),
-  });
   const saveTpl = useMutation({
     mutationFn: (content: string) => apiPost('/api/codex/settings/template/save', { content }),
     onSuccess: () => {
-      setNotice('模版已保存');
-      setError('');
+      toast.success('config.toml applied');
       qc.invalidateQueries({ queryKey: ['codex', 'settings', 'template'] });
-      qc.invalidateQueries({ queryKey: ['codex', 'settings'] });
+      qc.invalidateQueries({ queryKey: ['codex', 'settings', 'template', 'sync-status'] });
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
+  const applyAgents = useMutation({
+    mutationFn: (text: string) => apiPost('/api/codex/agents/apply', { content: text }),
+    onSuccess: () => {
+      toast.success('AGENTS.md applied');
+      qc.invalidateQueries({ queryKey: ['codex', 'agents'] });
+      qc.invalidateQueries({ queryKey: ['codex', 'agents', 'sync-status'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const handleKeyDown = (
+    e: KeyboardEvent<HTMLTextAreaElement>,
+    setter: (v: string) => void,
+  ) => {
+    const ta = e.currentTarget;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const value = ta.value;
+      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+      const currentLine = value.slice(lineStart, start);
+      const indentMatch = currentLine.match(/^[ \t]*/);
+      const indent = indentMatch ? indentMatch[0] : '';
+      const insert = '\n' + indent;
+      const next = value.slice(0, start) + insert + value.slice(end);
+      setter(next);
+      const caret = start + insert.length;
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = caret;
+      });
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const value = ta.value;
+      const next = value.slice(0, start) + '  ' + value.slice(end);
+      setter(next);
+      const caret = start + 2;
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = caret;
+      });
+    }
+  };
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Codex 设置</CardTitle>
+          <CardTitle className="flex items-center justify-between gap-2">
+            <span>config.toml</span>
+            <SyncBadge status={tplSync} />
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="text-xs text-muted-foreground">
-            config.toml: <code>{data?.path || '~/.codex/config.toml'}</code>
+            Template: <code>{tpl?.path || 'conf/codex/config.toml'}</code>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
-            <div>
-              <Label>账号登录模式 (authMode)</Label>
-              <p className="text-xs text-muted-foreground">开启后使用账号登录，关闭后使用自定义 base_url + apiKey</p>
-            </div>
-            <Switch
-              checked={!!data?.authMode}
-              onCheckedChange={(v) => setAuthMode.mutate(v)}
-              disabled={setAuthMode.isPending}
-            />
+          <div className="text-xs text-muted-foreground">
+            Target: <code>~/.codex/config.toml</code>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <Label>base_url</Label>
-              <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:4141" disabled={!!data?.authMode} />
-            </div>
-            <div className="space-y-1">
-              <Label>api_key</Label>
-              <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="dummy" disabled={!!data?.authMode} />
-            </div>
-            <div className="space-y-1">
-              <Label>model</Label>
-              <ModelSelect value={model} onChange={setModel} />
-            </div>
+          <div className="text-xs text-muted-foreground">
+            Apply strategy: sync existing keys into <code>~/.codex/config.toml</code>; other keys are kept untouched.
           </div>
-          {notice ? <div className="text-xs text-green-500">{notice}</div> : null}
-          {error ? <div className="text-xs text-destructive">{error}</div> : null}
-          <Button onClick={() => save.mutate()} disabled={save.isPending}>
-            {save.isPending ? '保存中...' : '保存设置'}
+          <textarea
+            value={tplContent}
+            onChange={(e) => setTplContent(e.target.value)}
+            onKeyDown={(e) => handleKeyDown(e, setTplContent)}
+            spellCheck={false}
+            className="h-72 w-full resize-y rounded-md border border-border bg-muted/30 p-3 font-mono text-xs"
+          />
+          <Button onClick={() => saveTpl.mutate(tplContent)} disabled={saveTpl.isPending}>
+            {saveTpl.isPending ? 'Applying...' : 'Apply'}
           </Button>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>config.toml 模版</CardTitle>
+          <CardTitle className="flex items-center justify-between gap-2">
+            <span>AGENTS.md</span>
+            <SyncBadge status={agentsSync} />
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="text-xs text-muted-foreground">
-            模版路径: <code>{tpl?.path || 'conf/codex/config.toml'}</code>
+            Template: <code>{agents?.path || 'conf/codex/AGENTS.md'}</code>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Target: <code>{agents?.syncedPath || '~/.codex/AGENTS.md'}</code>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Apply strategy: overwrite <code>~/.codex/AGENTS.md</code> entirely with the template content.
           </div>
           <textarea
-            value={tplContent}
-            onChange={(e) => setTplContent(e.target.value)}
+            value={agentsContent}
+            onChange={(e) => setAgentsContent(e.target.value)}
+            onKeyDown={(e) => handleKeyDown(e, setAgentsContent)}
             spellCheck={false}
-            className="h-72 w-full resize-y rounded-md border border-border bg-muted/30 p-3 font-mono text-xs"
+            className="h-[480px] w-full resize-y rounded-md border border-border bg-muted/30 p-3 font-mono text-xs"
+            placeholder={agentsLoading ? 'Loading...' : 'Enter AGENTS.md content here'}
           />
-          <Button onClick={() => saveTpl.mutate(tplContent)} disabled={saveTpl.isPending}>
-            {saveTpl.isPending ? '保存中...' : '保存模版'}
+          <Button onClick={() => applyAgents.mutate(agentsContent)} disabled={applyAgents.isPending}>
+            {applyAgents.isPending ? 'Applying...' : 'Apply'}
           </Button>
         </CardContent>
       </Card>

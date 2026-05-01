@@ -14,14 +14,21 @@ export class CodexAgentsService {
     return this.deps.paths.codexPath('AGENTS.md');
   }
 
+  private toDisplayPath(p: string): string {
+    const home = this.deps.paths.homeDir;
+    if (p === home) return '~';
+    if (p.startsWith(home + path.sep)) return '~' + p.slice(home.length);
+    return p;
+  }
+
   async get(): Promise<{ path: string; syncedPath: string; content: string; exists: boolean }> {
     const p = this.confPath();
     try {
       const content = await fs.readFile(p, 'utf-8');
-      return { path: p, syncedPath: this.homePath(), content, exists: true };
+      return { path: this.toDisplayPath(p), syncedPath: this.toDisplayPath(this.homePath()), content, exists: true };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { path: p, syncedPath: this.homePath(), content: '', exists: false };
+        return { path: this.toDisplayPath(p), syncedPath: this.toDisplayPath(this.homePath()), content: '', exists: false };
       }
       throw err;
     }
@@ -56,5 +63,10 @@ export class CodexAgentsService {
     const home = this.homePath();
     await fs.mkdir(path.dirname(home), { recursive: true });
     await fs.writeFile(home, local);
+  }
+
+  async apply(content: string): Promise<void> {
+    await this.save(content);
+    await this.sync();
   }
 }

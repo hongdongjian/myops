@@ -3,13 +3,11 @@ export interface ApiError { success: false; error: string; }
 export type ApiResponse<T> = ApiSuccess<T> | ApiError;
 
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> ?? {}) };
+  if (init?.body !== undefined && headers['Content-Type'] === undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(path, { ...init, headers });
   const body = (await res.json().catch(() => ({}))) as ApiResponse<T>;
   if (!('success' in body) || body.success === false) {
     throw new Error(body && 'error' in body ? body.error : `HTTP ${res.status}`);

@@ -24,8 +24,8 @@ export function ConfirmDialog({
   trigger,
   title,
   description,
-  confirmText = '确认',
-  cancelText = '取消',
+  confirmText = 'Confirm',
+  cancelText = 'Cancel',
   destructive = false,
   onConfirm,
 }: ConfirmDialogProps) {

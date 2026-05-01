@@ -132,7 +132,7 @@ describe('CopilotService', () => {
     const { deps } = makeDeps();
     const svc = new CopilotService(deps);
     expect(svc.startEnv()).toBeNull();
-    await svc.setProxy(true);
+    await svc.setProxy(true, 'http://127.0.0.1:7897');
     expect(svc.startEnv()).toEqual({
       HTTP_PROXY: 'http://127.0.0.1:7897',
       HTTPS_PROXY: 'http://127.0.0.1:7897',

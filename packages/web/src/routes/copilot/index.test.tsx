@@ -52,15 +52,15 @@ describe('Copilot page', () => {
   it('renders copilot tabs and console content', async () => {
     wrap(<Copilot />);
     expect(screen.getByRole('heading', { name: 'Copilot' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: '控制台' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: '账号' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: '配置' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Console' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Accounts' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Config' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText('1.2.3').length).toBeGreaterThan(0));
-    expect(screen.getByText(/copilot-api 服务管理/)).toBeInTheDocument();
+    expect(screen.getAllByText(/copilot-api/).length).toBeGreaterThan(0);
   });
 
   it('shows running status badge', async () => {
     wrap(<Copilot />);
-    await waitFor(() => expect(screen.getByText('运行中')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Running')).toBeInTheDocument());
   });
 });

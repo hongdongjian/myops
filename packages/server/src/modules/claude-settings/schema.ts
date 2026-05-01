@@ -13,11 +13,6 @@ export const AutoCompactSetRequestSchema = z.object({
 });
 export type AutoCompactSetRequest = z.infer<typeof AutoCompactSetRequestSchema>;
 
-export const RenderModelEnvSetRequestSchema = z.object({
-  enabled: z.boolean(),
-});
-export type RenderModelEnvSetRequest = z.infer<typeof RenderModelEnvSetRequestSchema>;
-
 export const SettingsTemplateSaveRequestSchema = z.object({
   content: z.string(),
 });
@@ -27,6 +22,11 @@ export const PowerlineSaveRequestSchema = z.object({
   content: z.string(),
 });
 export type PowerlineSaveRequest = z.infer<typeof PowerlineSaveRequestSchema>;
+
+export const GlobalConfigSaveRequestSchema = z.object({
+  content: z.string(),
+});
+export type GlobalConfigSaveRequest = z.infer<typeof GlobalConfigSaveRequestSchema>;
 
 export interface ApiEnvelope<T = unknown> {
   success: boolean;

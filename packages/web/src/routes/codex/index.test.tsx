@@ -27,10 +27,10 @@ describe('Codex page', () => {
     vi.stubGlobal('fetch', makeFetchStub());
   });
 
-  it('renders all 6 tab labels', () => {
+  it('renders all 5 tab labels', () => {
     wrap(<Codex />);
     expect(screen.getByRole('heading', { name: 'Codex' })).toBeInTheDocument();
-    for (const label of ['设置', 'MCP', '账号', 'AGENTS.md', 'Skills', '版本']) {
+    for (const label of ['Version', 'Settings', 'Providers', 'MCP', 'Skills']) {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
     }
   });

@@ -17,7 +17,7 @@ describe('ConfirmDialog', () => {
 
     fireEvent.click(screen.getByText('open'));
     await waitFor(() => expect(screen.getByText('Are you sure?')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('确认'));
+    fireEvent.click(screen.getByText('Confirm'));
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
   });
 });

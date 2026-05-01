@@ -27,10 +27,10 @@ describe('Claude page', () => {
     vi.stubGlobal('fetch', makeFetchStub());
   });
 
-  it('renders all 8 tab labels', () => {
+  it('renders all tab labels in order', () => {
     wrap(<Claude />);
     expect(screen.getByRole('heading', { name: 'Claude' })).toBeInTheDocument();
-    for (const label of ['设置', 'MCP', 'Skills', 'Rules', '指令', '插件', '模型路由', '版本']) {
+    for (const label of ['Version', 'Settings', 'Provider', 'MCP', 'Skills', 'Rules', 'Plugins']) {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
     }
   });

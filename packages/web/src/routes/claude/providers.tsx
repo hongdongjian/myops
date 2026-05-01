@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -13,6 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { useToast } from '@/components/toast';
+import { cn } from '@/lib/cn';
 
 interface Provider {
   name: string;
@@ -20,6 +23,8 @@ interface Provider {
   token: string;
   model: string;
   haikuModel: string;
+  sonnetModel: string;
+  opusModel: string;
 }
 
 interface ProvidersPayload {
@@ -27,27 +32,62 @@ interface ProvidersPayload {
   activeProvider: string;
 }
 
-const empty: Provider = { name: '', baseUrl: '', token: '', model: '', haikuModel: '' };
+const BASE_URL_PRESETS = [
+  { label: 'DeepSeek', value: 'https://api.deepseek.com/anthropic' },
+  { label: 'BigModel', value: 'https://open.bigmodel.cn/api/anthropic' },
+  { label: 'Local', value: 'http://localhost:4141' },
+];
+
+const empty: Provider = { name: '', baseUrl: '', token: '', model: '', haikuModel: '', sonnetModel: '', opusModel: '' };
+
+function BaseUrlField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {BASE_URL_PRESETS.map((preset) => (
+          <button
+            key={preset.value}
+            type="button"
+            onClick={() => onChange(preset.value)}
+            className={cn(
+              'rounded-md px-2.5 py-1 text-xs font-medium border transition-all duration-150',
+              value === preset.value
+                ? 'border-primary bg-primary/10 text-primary shadow-sm'
+                : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-muted/70',
+            )}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      <Input
+        value={value}
+        placeholder="Or enter a custom URL..."
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
 
 export function ClaudeProviders() {
   const qc = useQueryClient();
+  const toast = useToast();
   const { data, isLoading, error } = useQuery<ProvidersPayload>({
     queryKey: ['claude', 'providers'],
     queryFn: () => apiGet<ProvidersPayload>('/api/claude/providers'),
   });
 
   const [editing, setEditing] = useState<{ original: string | null; form: Provider } | null>(null);
-  const [actionMsg, setActionMsg] = useState('');
-  const [actionErr, setActionErr] = useState('');
+  const [showToken, setShowToken] = useState(false);
 
   const add = useMutation({
     mutationFn: (p: Provider) => apiPost('/api/claude/providers/add', p),
     onSuccess: () => {
       setEditing(null);
-      setActionMsg('已添加');
+      toast.success('Added');
       qc.invalidateQueries({ queryKey: ['claude', 'providers'] });
     },
-    onError: (e: Error) => setActionErr(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
   const update = useMutation({
     mutationFn: ({ original, p }: { original: string; p: Provider }) =>
@@ -58,37 +98,37 @@ export function ClaudeProviders() {
         token: p.token,
         model: p.model,
         haikuModel: p.haikuModel,
+        sonnetModel: p.sonnetModel,
+        opusModel: p.opusModel,
       }),
     onSuccess: () => {
       setEditing(null);
-      setActionMsg('已更新');
+      toast.success('Updated');
       qc.invalidateQueries({ queryKey: ['claude', 'providers'] });
     },
-    onError: (e: Error) => setActionErr(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
   const del = useMutation({
     mutationFn: (name: string) => apiPost('/api/claude/providers/delete', { name }),
     onSuccess: () => {
-      setActionMsg('已删除');
+      toast.success('Deleted');
       qc.invalidateQueries({ queryKey: ['claude', 'providers'] });
     },
-    onError: (e: Error) => setActionErr(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
   const apply = useMutation({
     mutationFn: (name: string) => apiPost('/api/claude/providers/apply', { name }),
     onSuccess: () => {
-      setActionMsg('已应用');
+      toast.success('Applied');
       qc.invalidateQueries({ queryKey: ['claude', 'providers'] });
     },
-    onError: (e: Error) => setActionErr(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const handleSubmit = () => {
     if (!editing) return;
-    setActionErr('');
-    setActionMsg('');
     if (!editing.form.name.trim()) {
-      setActionErr('name 必填');
+      toast.error('name is required');
       return;
     }
     if (editing.original) {
@@ -102,15 +142,15 @@ export function ClaudeProviders() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between">
-          <span>模型路由 / 供应商</span>
+          <span>Providers</span>
           <Button size="sm" onClick={() => setEditing({ original: null, form: { ...empty } })}>
-            + 新增供应商
+            + Add Provider
           </Button>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
         {error ? <div className="text-xs text-destructive">{(error as Error).message}</div> : null}
-        {isLoading ? <div className="text-xs text-muted-foreground">加载中...</div> : null}
+        {isLoading ? <div className="text-xs text-muted-foreground">Loading...</div> : null}
         {(data?.providers ?? []).map((p) => {
           const active = data?.activeProvider === p.name;
           return (
@@ -118,93 +158,123 @@ export function ClaudeProviders() {
               <div className="space-y-0.5">
                 <div className="flex items-center gap-2 font-medium">
                   {p.name}
-                  {active ? <Badge className="bg-green-600 text-white">当前</Badge> : null}
+                  {active ? <Badge className="bg-green-600 text-white">Active</Badge> : null}
                 </div>
                 <div className="text-xs text-muted-foreground">
                   base: <code>{p.baseUrl || '--'}</code>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  model: <code>{p.model || '--'}</code> · haiku: <code>{p.haikuModel || '--'}</code>
+                  sonnet: <code>{p.sonnetModel || p.model || '--'}</code> · opus: <code>{p.opusModel || p.model || '--'}</code> · haiku: <code>{p.haikuModel || '--'}</code>
                 </div>
               </div>
               <div className="flex gap-2">
                 <Button size="sm" onClick={() => apply.mutate(p.name)} disabled={apply.isPending}>
-                  应用
+                  Apply
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => setEditing({ original: p.name, form: { ...p } })}>
-                  编辑
+                  Edit
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => {
-                    if (window.confirm(`删除 provider ${p.name}？`)) del.mutate(p.name);
+                    if (window.confirm(`Delete provider ${p.name}?`)) del.mutate(p.name);
                   }}
                   disabled={del.isPending}
                 >
-                  删除
+                  Delete
                 </Button>
               </div>
             </div>
           );
         })}
         {!isLoading && (data?.providers ?? []).length === 0 ? (
-          <div className="text-xs text-muted-foreground">暂无供应商</div>
+          <div className="text-xs text-muted-foreground">No providers</div>
         ) : null}
-        {actionMsg ? <div className="text-xs text-green-500">{actionMsg}</div> : null}
-        {actionErr ? <div className="text-xs text-destructive">{actionErr}</div> : null}
       </CardContent>
 
-      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+      <Dialog open={!!editing} onOpenChange={(o) => { if (!o) { setEditing(null); setShowToken(false); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editing?.original ? '编辑供应商' : '新增供应商'}</DialogTitle>
+            <DialogTitle>{editing?.original ? 'Edit Provider' : 'Add Provider'}</DialogTitle>
           </DialogHeader>
           {editing ? (
-            <div className="grid gap-3">
-              <div className="space-y-1">
-                <Label>name</Label>
+          <div className="grid gap-4">
+              <div className="space-y-1.5">
+                <Label>Name</Label>
                 <Input
                   value={editing.form.name}
                   onChange={(e) => setEditing({ ...editing, form: { ...editing.form, name: e.target.value } })}
                 />
               </div>
-              <div className="space-y-1">
-                <Label>baseUrl</Label>
-                <Input
+              <div className="space-y-1.5">
+                <Label>Base URL</Label>
+                <BaseUrlField
                   value={editing.form.baseUrl}
-                  onChange={(e) => setEditing({ ...editing, form: { ...editing.form, baseUrl: e.target.value } })}
+                  onChange={(v) => setEditing({ ...editing, form: { ...editing.form, baseUrl: v } })}
                 />
               </div>
-              <div className="space-y-1">
-                <Label>token</Label>
-                <Input
-                  value={editing.form.token}
-                  onChange={(e) => setEditing({ ...editing, form: { ...editing.form, token: e.target.value } })}
-                />
+              <div className="space-y-1.5">
+                <Label>Token</Label>
+                <div className="relative">
+                  <Input
+                    type={showToken ? 'text' : 'password'}
+                    value={editing.form.token}
+                    placeholder="sk-..."
+                    className="pr-9"
+                    onChange={(e) => setEditing({ ...editing, form: { ...editing.form, token: e.target.value } })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label>model</Label>
-                <Input
-                  value={editing.form.model}
-                  onChange={(e) => setEditing({ ...editing, form: { ...editing.form, model: e.target.value } })}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>haikuModel</Label>
-                <Input
-                  value={editing.form.haikuModel}
-                  onChange={(e) => setEditing({ ...editing, form: { ...editing.form, haikuModel: e.target.value } })}
-                />
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Model Mappings</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Opus</Label>
+                    <Input
+                      value={editing.form.opusModel}
+                      placeholder="e.g. deepseek-r1"
+                      onChange={(e) => setEditing({ ...editing, form: { ...editing.form, opusModel: e.target.value } })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Sonnet</Label>
+                    <Input
+                      value={editing.form.sonnetModel}
+                      placeholder="e.g. deepseek-chat"
+                      onChange={(e) => setEditing({ ...editing, form: { ...editing.form, sonnetModel: e.target.value } })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Haiku</Label>
+                    <Input
+                      value={editing.form.haikuModel}
+                      placeholder="e.g. deepseek-chat"
+                      onChange={(e) => setEditing({ ...editing, form: { ...editing.form, haikuModel: e.target.value } })}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>
-              取消
+              Cancel
             </Button>
             <Button onClick={handleSubmit} disabled={add.isPending || update.isPending}>
-              保存
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>

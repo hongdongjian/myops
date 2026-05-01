@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '@/lib/api';
 import { useStatusPolling } from '@/lib/use-status-polling';
 import { StatusBadge } from '@/components/status-badge';
@@ -6,7 +7,9 @@ import { LogPanel } from '@/components/log-panel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { CopilotVersion } from './version';
 import type {
   AutostartState,
   CopilotStatus,
@@ -50,7 +53,6 @@ export function CopilotConsole() {
   });
 
   const running = !!status?.process?.running;
-  const version = status?.version;
 
   const start = useMutation({
     mutationFn: () => apiPost('/api/copilot/start'),
@@ -64,32 +66,36 @@ export function CopilotConsole() {
     mutationFn: () => apiPost('/api/copilot/restart'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['copilot'] }),
   });
-  const upgrade = useMutation({
-    mutationFn: () => apiPost('/api/copilot/upgrade'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['copilot'] }),
-  });
 
   const setAutostart = useMutation({
     mutationFn: (enabled: boolean) => apiPost<AutostartState>('/api/copilot/autostart/set', { enabled }),
     onSuccess: (data) => qc.setQueryData(['copilot', 'autostart'], data),
   });
   const setProxy = useMutation({
-    mutationFn: (enabled: boolean) => apiPost<ProxyState>('/api/copilot/proxy/set', { enabled }),
+    mutationFn: (req: { enabled: boolean; proxyURL?: string }) =>
+      apiPost<ProxyState>('/api/copilot/proxy/set', req),
     onSuccess: (data) => {
       qc.setQueryData(['copilot', 'proxy'], data);
       qc.invalidateQueries({ queryKey: ['copilot', 'status'] });
     },
   });
 
+  const [proxyUrlInput, setProxyUrlInput] = useState('');
+  useEffect(() => {
+    if (proxy?.proxyURL !== undefined) setProxyUrlInput(proxy.proxyURL);
+  }, [proxy?.proxyURL]);
+
   const usageData = (usage ?? {}) as UsageEnvelopeData;
   const unlimited = !!usageData.unlimited;
 
   return (
     <div className="space-y-4">
+      <CopilotVersion />
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-3">
-            <span>copilot-api 服务管理</span>
+            <span>copilot-api</span>
             <StatusBadge running={running} />
             {status?.sourceUrl ? (
               <a
@@ -98,39 +104,28 @@ export function CopilotConsole() {
                 rel="noreferrer"
                 className="text-xs text-muted-foreground hover:underline"
               >
-                源码
+                Source
               </a>
             ) : null}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => start.mutate()} disabled={running || start.isPending}>启动</Button>
+            <Button onClick={() => start.mutate()} disabled={running || start.isPending}>Start</Button>
             <Button variant="outline" onClick={() => stop.mutate()} disabled={!running || stop.isPending}>
-              停止
+              Stop
             </Button>
             <Button variant="outline" onClick={() => restart.mutate()} disabled={!running || restart.isPending}>
-              重启
-            </Button>
-            <Button variant="outline" onClick={() => upgrade.mutate()} disabled={upgrade.isPending}>
-              {upgrade.isPending ? '升级中...' : version?.canUpgrade ? `升级到 ${version.upgradeTarget}` : '升级'}
+              Restart
             </Button>
           </div>
           <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <Label className="text-muted-foreground">版本</Label>
-              <div className="font-mono">{version?.current || '--'}</div>
-            </div>
             <div>
               <Label className="text-muted-foreground">PID</Label>
               <div className="font-mono">{status?.process?.pid || '--'}</div>
             </div>
             <div>
-              <Label className="text-muted-foreground">最新版本</Label>
-              <div className="font-mono">{version?.latest || '--'}</div>
-            </div>
-            <div>
-              <Label className="text-muted-foreground">健康状态</Label>
+              <Label className="text-muted-foreground">Health</Label>
               <div className="font-mono">{status?.health?.state || '--'}</div>
             </div>
           </div>
@@ -138,8 +133,8 @@ export function CopilotConsole() {
           <div className="grid grid-cols-2 gap-4 border-t border-border pt-4">
             <div className="flex items-center justify-between">
               <div>
-                <Label>自动启动</Label>
-                <p className="text-xs text-muted-foreground">服务启动时自动拉起 copilot-api</p>
+                <Label>Auto-start</Label>
+                <p className="text-xs text-muted-foreground">Auto-start copilot-api when service starts</p>
               </div>
               <Switch
                 checked={!!autostart?.enabled}
@@ -148,13 +143,28 @@ export function CopilotConsole() {
               />
             </div>
             <div className="flex items-center justify-between">
-              <div>
-                <Label>启用代理</Label>
-                <p className="text-xs text-muted-foreground break-all">{proxy?.proxyURL || '未配置代理'}</p>
+              <div className="flex-1 mr-3 space-y-1">
+                <Label>Enable Proxy</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={proxyUrlInput}
+                    onChange={(e) => setProxyUrlInput(e.target.value)}
+                    placeholder="http://127.0.0.1:7897"
+                    className="text-xs"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setProxy.mutate({ enabled: !!proxy?.enabled, proxyURL: proxyUrlInput })}
+                    disabled={setProxy.isPending}
+                  >
+                    Save
+                  </Button>
+                </div>
               </div>
               <Switch
                 checked={!!proxy?.enabled}
-                onCheckedChange={(v) => setProxy.mutate(v)}
+                onCheckedChange={(v) => setProxy.mutate({ enabled: v })}
                 disabled={setProxy.isPending}
               />
             </div>
@@ -165,19 +175,19 @@ export function CopilotConsole() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
-            <span>使用量</span>
+            <span>Usage</span>
             <Button size="sm" variant="outline" onClick={() => refetchUsage()}>
-              刷新
+              Refresh
             </Button>
           </CardTitle>
         </CardHeader>
         <CardContent>
           {unlimited ? (
-            <div className="text-sm text-muted-foreground">无限制</div>
+            <div className="text-sm text-muted-foreground">Unlimited</div>
           ) : (
             <div className="space-y-2 text-sm">
               <div className="flex items-center justify-between">
-                <span>已使用率</span>
+                <span>Usage rate</span>
                 <span className="font-mono">
                   {Number.isFinite(Number(usageData.percentUsed))
                     ? `${Number(usageData.percentUsed).toFixed(2)}%`
@@ -193,9 +203,9 @@ export function CopilotConsole() {
                 />
               </div>
               <div className="flex justify-between text-xs text-muted-foreground">
-                <span>已使用: {fmtNum(usageData.used)}</span>
-                <span>总量: {fmtNum(usageData.total)}</span>
-                <span>剩余: {fmtNum(usageData.remaining)}</span>
+                <span>Used: {fmtNum(usageData.used)}</span>
+                <span>Total: {fmtNum(usageData.total)}</span>
+                <span>Remaining: {fmtNum(usageData.remaining)}</span>
               </div>
             </div>
           )}
@@ -204,13 +214,13 @@ export function CopilotConsole() {
 
       <Card>
         <CardHeader>
-          <CardTitle>当前账号</CardTitle>
+          <CardTitle>Current Account</CardTitle>
         </CardHeader>
         <CardContent className="text-sm">
           {status?.auth?.currentAccount ? (
             <div className="space-y-1">
               <div>
-                <span className="text-muted-foreground">登录: </span>
+                <span className="text-muted-foreground">Login: </span>
                 <span className="font-mono">{status.auth.currentAccount.login}</span>
               </div>
               {status.auth.currentAccount.tokenPreview ? (
@@ -221,14 +231,14 @@ export function CopilotConsole() {
               ) : null}
             </div>
           ) : (
-            <div className="text-muted-foreground">未登录，请前往「账号」标签页登录。</div>
+            <div className="text-muted-foreground">Not logged in. Go to the Accounts tab to sign in.</div>
           )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>日志</CardTitle>
+          <CardTitle>Logs</CardTitle>
         </CardHeader>
         <CardContent>
           <LogPanel path="/api/copilot/logs?lines=500" clearPath="/api/copilot/logs/clear" />
