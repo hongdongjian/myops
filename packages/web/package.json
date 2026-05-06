@@ -28,6 +28,7 @@
     "react-router-dom": "^6.23.0",
     "tailwind-merge": "2.6.1",
     "tailwindcss-animate": "1.0.7",
+    "yaml": "2.8.4",
     "zod": "^3.22.0"
   },
   "devDependencies": {

@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/components/toast';
 import { cn } from '@/lib/cn';
+import { type ClashProxy, ProxyDialog } from './proxy-dialog';
 
 interface ClashGroup {
   name: string;
@@ -42,6 +43,7 @@ interface ClashConfig {
   subscribe_url: string;
   refresh_interval_minutes: number;
   api_key?: string;
+  custom_proxies?: ClashProxy[];
   groups: ClashGroup[];
   rule_sets: ClashRuleSet[];
 }
@@ -85,10 +87,11 @@ interface GroupDialogProps {
   onOpenChange: (o: boolean) => void;
   initial?: ClashGroup | null;
   upstreamGroupNames: string[];
+  customGroupNames: string[];
   onSubmit: (g: ClashGroup) => void;
 }
 
-function GroupDialog({ open, onOpenChange, initial, upstreamGroupNames, onSubmit }: GroupDialogProps) {
+function GroupDialog({ open, onOpenChange, initial, upstreamGroupNames, customGroupNames, onSubmit }: GroupDialogProps) {
   const [name, setName] = useState('');
   const [type, setType] = useState<GroupType>('select');
   const [keywordsText, setKeywordsText] = useState('');
@@ -169,26 +172,45 @@ function GroupDialog({ open, onOpenChange, initial, upstreamGroupNames, onSubmit
             <Input value={keywordsText} onChange={(e) => setKeywordsText(e.target.value)} placeholder="HK, 香港, US" />
             <p className="text-xs text-muted-foreground">Proxies whose names contain any keyword will be included.</p>
           </div>
-          {upstreamGroupNames.length > 0 ? (
+          {(upstreamGroupNames.length > 0 || customGroupNames.length > 0) ? (
             <div className="space-y-1.5">
               <Label className="flex items-center gap-1.5">
-                Inject Into <InfoIcon title="选择此分组需要注入的上游 select 代理组。不选则不注入任何上游分组。" />
+                Inject Into <InfoIcon title="选择此分组需要注入的 select 代理组（上游或自定义均可）。" />
               </Label>
-              <div className="max-h-32 overflow-y-auto rounded-md border border-border bg-muted/20 p-2">
-                <div className="flex flex-wrap gap-1.5">
-                  {upstreamGroupNames.map((n) => (
-                    <button key={n} type="button" onClick={() => toggleInjectInto(n)}
-                      className={cn('rounded border px-2 py-0.5 text-xs transition-all',
-                        injectInto.includes(n) ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground')}>
-                      {n}
-                    </button>
-                  ))}
-                </div>
+              <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/20 p-2 space-y-2">
+                {customGroupNames.length > 0 ? (
+                  <div>
+                    <p className="mb-1 text-[10px] text-muted-foreground">自定义分组</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {customGroupNames.map((n) => (
+                        <button key={n} type="button" onClick={() => toggleInjectInto(n)}
+                          className={cn('rounded border px-2 py-0.5 text-xs transition-all',
+                            injectInto.includes(n) ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground')}>
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {upstreamGroupNames.length > 0 ? (
+                  <div>
+                    <p className="mb-1 text-[10px] text-muted-foreground">上游分组</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {upstreamGroupNames.map((n) => (
+                        <button key={n} type="button" onClick={() => toggleInjectInto(n)}
+                          className={cn('rounded border px-2 py-0.5 text-xs transition-all',
+                            injectInto.includes(n) ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground')}>
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
               {injectInto.length > 0 ? (
                 <p className="text-xs text-muted-foreground">已选: {injectInto.join(', ')}</p>
               ) : (
-                <p className="text-xs text-muted-foreground">未选择 — 此分组不会注入任何上游 select 组</p>
+                <p className="text-xs text-muted-foreground">未选择 — 此分组不会注入任何 select 组</p>
               )}
             </div>
           ) : null}
@@ -405,6 +427,8 @@ export function ClashTab() {
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<ClashGroup | null>(null);
+  const [proxyDialogOpen, setProxyDialogOpen] = useState(false);
+  const [editingProxy, setEditingProxy] = useState<ClashProxy | null>(null);
   const [ruleSetDialogOpen, setRuleSetDialogOpen] = useState(false);
   const [editingRuleSet, setEditingRuleSet] = useState<ClashRuleSet | null>(null);
   const initRef = useRef(false);
@@ -443,6 +467,20 @@ export function ClashTab() {
     save.mutate({ groups: updated });
     setGroupDialogOpen(false);
     setEditingGroup(null);
+  };
+
+  const handleProxySubmit = (p: ClashProxy) => {
+    const custom_proxies = cfg?.custom_proxies ?? [];
+    const updated = editingProxy
+      ? custom_proxies.map((x) => (x.name === editingProxy.name ? p : x))
+      : [...custom_proxies, p];
+    save.mutate({ custom_proxies: updated });
+    setProxyDialogOpen(false);
+    setEditingProxy(null);
+  };
+
+  const handleDeleteProxy = (name: string) => {
+    save.mutate({ custom_proxies: (cfg?.custom_proxies ?? []).filter((p) => p.name !== name) });
   };
 
   const handleDeleteGroup = (name: string) => {
@@ -494,7 +532,10 @@ export function ClashTab() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const upstreamProxies = upstreamQuery.data?.proxies ?? [];
+  const upstreamProxies = [
+    ...(upstreamQuery.data?.proxies ?? []),
+    ...(cfg?.custom_proxies ?? []).map((p) => p.name),
+  ];
   const groupNames = (cfg?.groups ?? []).map((g) => g.name);
 
   return (
@@ -549,6 +590,36 @@ export function ClashTab() {
               ) : null}
             </div>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Custom Proxies</span>
+            <Button size="sm" onClick={() => { setEditingProxy(null); setProxyDialogOpen(true); }}>
+              + Add Proxy
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {(cfg?.custom_proxies ?? []).length === 0 ? (
+            <div className="text-sm text-muted-foreground">No custom proxies. Click "+ Add Proxy" to add one.</div>
+          ) : (cfg?.custom_proxies ?? []).map((p) => (
+            <div key={p.name} className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="font-medium">{p.name}</span>
+                {p.type ? <Badge variant="secondary" className="text-xs">{String(p.type)}</Badge> : null}
+                {p.server && p.port ? <span className="font-mono text-xs text-muted-foreground">{String(p.server)}:{String(p.port)}</span> : null}
+                {p.network ? <Badge variant="outline" className="text-xs">{String(p.network)}</Badge> : null}
+                {p.tls ? <Badge variant="outline" className="text-xs text-green-600 dark:text-green-400">TLS</Badge> : null}
+              </div>
+              <div className="flex gap-1.5">
+                <Button size="sm" variant="outline" onClick={() => { setEditingProxy(p); setProxyDialogOpen(true); }}>Edit</Button>
+                <Button size="sm" variant="destructive" onClick={() => { if (window.confirm(`Delete proxy "${p.name}"?`)) handleDeleteProxy(p.name); }}>Delete</Button>
+              </div>
+            </div>
+          ))}
         </CardContent>
       </Card>
 
@@ -660,6 +731,7 @@ export function ClashTab() {
         onOpenChange={(o) => { setGroupDialogOpen(o); if (!o) setEditingGroup(null); }}
         initial={editingGroup}
         upstreamGroupNames={upstreamQuery.data?.groups ?? []}
+        customGroupNames={(cfg?.groups ?? []).map((g) => g.name).filter((n) => n !== editingGroup?.name)}
         onSubmit={handleGroupSubmit}
       />
       <RuleSetDialog
@@ -669,6 +741,12 @@ export function ClashTab() {
         groupNames={groupNames}
         upstreamGroupNames={upstreamQuery.data?.groups ?? []}
         onSubmit={handleRuleSetSubmit}
+      />
+      <ProxyDialog
+        open={proxyDialogOpen}
+        onOpenChange={(o) => { setProxyDialogOpen(o); if (!o) setEditingProxy(null); }}
+        initial={editingProxy}
+        onSubmit={handleProxySubmit}
       />
     </div>
   );

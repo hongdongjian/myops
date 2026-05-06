@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+export const ClashProxySchema = z.object({
+  name: z.string().min(1),
+}).passthrough();
+export type ClashProxy = z.infer<typeof ClashProxySchema>;
+
 export const ClashGroupSchema = z.object({
   name: z.string().min(1),
   type: z.string().min(1),
@@ -28,6 +33,7 @@ export const ClashConfigSchema = z.object({
   subscribe_url: z.string().default(''),
   refresh_interval_minutes: z.number().int().min(1).default(60),
   api_key: z.string().optional(),
+  custom_proxies: z.array(ClashProxySchema).default([]),
   groups: z.array(ClashGroupSchema).default([]),
   rule_sets: z.array(ClashRuleSetSchema).default([]),
 });

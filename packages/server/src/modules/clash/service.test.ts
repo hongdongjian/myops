@@ -44,6 +44,7 @@ describe('clash service', () => {
   it('mergeClashConfig prepends custom rules and appends groups', () => {
     const merged = mergeClashConfig(sampleYaml, {
       subscribe_url: '',
+      custom_proxies: [],
       groups: [{ name: 'My', type: 'select', proxies: ['A'] }],
       rule_sets: [{ name: 'r1', group: 'My', rules: ['DOMAIN,abc.com'] }],
     });
@@ -56,7 +57,7 @@ describe('clash service', () => {
     const { deps } = makeDeps();
     const svc = new ClashService(deps);
     const cfg = await svc.loadConfig();
-    expect(cfg).toEqual({ subscribe_url: '', refresh_interval_minutes: 60, groups: [], rule_sets: [] });
+    expect(cfg).toEqual({ subscribe_url: '', refresh_interval_minutes: 60, custom_proxies: [], groups: [], rule_sets: [] });
   });
 
   it('saveConfig + loadConfig roundtrip', async () => {
@@ -64,11 +65,46 @@ describe('clash service', () => {
     const svc = new ClashService(deps);
     await svc.saveConfig({
       subscribe_url: 'https://example.com/sub',
+      custom_proxies: [],
       groups: [{ name: 'g', type: 'select', proxies: ['A'] }],
       rule_sets: [],
     });
     const back = await svc.loadConfig();
     expect(back.subscribe_url).toBe('https://example.com/sub');
     expect(back.groups).toHaveLength(1);
+  });
+
+  it('mergeClashConfig prepends custom proxies and includes them in keyword matching', () => {
+    const merged = mergeClashConfig(sampleYaml, {
+      subscribe_url: '',
+      custom_proxies: [
+        {
+          name: '日本自建节点',
+          type: 'vmess',
+          server: 'proxy.example.com',
+          port: 443,
+          uuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          alterId: 0,
+          cipher: 'auto',
+          tls: true,
+          'skip-cert-verify': true,
+          network: 'ws',
+          'ws-opts': {
+            path: '/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+            headers: { Host: 'proxy.example.com' },
+          },
+          udp: true,
+          tfo: false,
+        },
+      ],
+      groups: [{ name: 'JP', type: 'url-test', proxies: [], keywords: ['日本'] }],
+      rule_sets: [],
+    });
+    expect(merged).toContain('日本自建节点');
+    expect(merged).toContain('proxy.example.com');
+    expect(merged).toContain('alterId: 0');
+    expect(merged).toContain('skip-cert-verify: true');
+    expect(merged).toContain('name: JP');
+    expect(merged).toContain('日本自建节点');
   });
 });

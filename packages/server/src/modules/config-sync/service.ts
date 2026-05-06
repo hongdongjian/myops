@@ -227,6 +227,43 @@ export class ConfigSyncService {
     }
   }
 
+  async status(): Promise<{
+    confDir: string;
+    remoteUrl: string | null;
+    branch: string | null;
+    changes: string[];
+    ahead: string[];
+    behind: string[];
+  }> {
+    const confDir = this.confDir();
+    const isRepo = await this.isGitRepo(confDir);
+    if (!isRepo) {
+      return { confDir, remoteUrl: null, branch: null, changes: [], ahead: [], behind: [] };
+    }
+    const remoteResult = await this.runner.run('git', ['remote', 'get-url', 'origin'], { cwd: confDir });
+    const remoteUrl = remoteResult.code === 0 ? remoteResult.stdout.trim() : null;
+    const branchResult = await this.runner.run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: confDir });
+    const branch = branchResult.code === 0 ? branchResult.stdout.trim() : null;
+    const statusResult = await this.runner.run('git', ['status', '--porcelain'], { cwd: confDir });
+    const changes = statusResult.stdout.split('\n').filter(Boolean);
+
+    let ahead: string[] = [];
+    let behind: string[] = [];
+    if (branch) {
+      await this.runner.run('git', ['fetch', 'origin'], { cwd: confDir });
+      const aheadResult = await this.runner.run(
+        'git', ['log', `origin/${branch}..HEAD`, '--oneline'], { cwd: confDir },
+      );
+      if (aheadResult.code === 0) ahead = aheadResult.stdout.split('\n').filter(Boolean);
+      const behindResult = await this.runner.run(
+        'git', ['log', `HEAD..origin/${branch}`, '--oneline'], { cwd: confDir },
+      );
+      if (behindResult.code === 0) behind = behindResult.stdout.split('\n').filter(Boolean);
+    }
+
+    return { confDir, remoteUrl, branch, changes, ahead, behind };
+  }
+
   loadSavedUrl(): string | null {
     try {
       const raw = fsSync.readFileSync(this.paths.dataPath(CONFIG_SYNC_FILE), 'utf-8');

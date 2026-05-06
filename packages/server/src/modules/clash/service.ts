@@ -5,7 +5,7 @@ import YAML from 'yaml';
 import { Mutex } from 'async-mutex';
 import type { Deps } from '../../deps.js';
 import { AppError } from '../../core/errors.js';
-import type { ClashConfig, ClashUpstreamInfo } from './schema.js';
+import type { ClashConfig, ClashProxy, ClashUpstreamInfo } from './schema.js';
 
 export const CLASH_FETCH_TIMEOUT_MS = 30 * 1000;
 
@@ -31,7 +31,7 @@ export class ClashService {
       return JSON.parse(data) as ClashConfig;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { subscribe_url: '', refresh_interval_minutes: 60, groups: [], rule_sets: [] };
+        return { subscribe_url: '', refresh_interval_minutes: 60, custom_proxies: [], groups: [], rule_sets: [] };
       }
       throw new AppError('CLASH_CONFIG_READ', `failed to read clash config: ${(err as Error).message}`, 500);
     }
@@ -127,6 +127,10 @@ export function parseUpstreamInfo(raw: string): ClashUpstreamInfo {
   return { proxies, groups };
 }
 
+function serializeProxy(p: ClashProxy): Record<string, unknown> {
+  return p as Record<string, unknown>;
+}
+
 export function mergeClashConfig(upstreamRaw: string, cfg: ClashConfig): string {
   const doc = (YAML.parse(upstreamRaw) ?? {}) as Record<string, unknown>;
   const upstreamProxyNames: string[] = [];
@@ -136,6 +140,14 @@ export function mergeClashConfig(upstreamRaw: string, cfg: ClashConfig): string 
         upstreamProxyNames.push((p as any).name);
       }
     }
+  }
+
+  const customProxies = cfg.custom_proxies ?? [];
+  if (customProxies.length > 0) {
+    const serialized = customProxies.map(serializeProxy);
+    const existingProxies = Array.isArray(doc.proxies) ? (doc.proxies as unknown[]) : [];
+    doc.proxies = [...serialized, ...existingProxies];
+    for (const p of customProxies) upstreamProxyNames.push(p.name);
   }
 
   if (cfg.groups.length > 0) {
@@ -167,7 +179,16 @@ export function mergeClashConfig(upstreamRaw: string, cfg: ClashConfig): string 
       }
       return eg;
     });
-    doc['proxy-groups'] = [...injected, ...additions];
+    const additionsWithInjections = additions.map((ga) => {
+      if ((ga as any).type !== 'select') return ga;
+      const gaName = (ga as any).name as string;
+      const toInject = cfg.groups
+        .filter((g) => g.inject_into?.includes(gaName) && g.name !== gaName)
+        .map((g) => g.name);
+      if (toInject.length === 0) return ga;
+      return { ...(ga as object), proxies: [...toInject, ...((ga as any).proxies ?? [])] };
+    });
+    doc['proxy-groups'] = [...injected, ...additionsWithInjections];
   }
 
   if (cfg.rule_sets.length > 0) {
@@ -175,7 +196,10 @@ export function mergeClashConfig(upstreamRaw: string, cfg: ClashConfig): string 
     const customRules: string[] = [];
     for (const rs of cfg.rule_sets) {
       if (rs.enabled === false) continue;
-      for (const rule of rs.rules) customRules.push(`${rule},${rs.group}`);
+      for (const rule of rs.rules) {
+        if (rule.trim().startsWith('#')) continue;
+        customRules.push(`${rule},${rs.group}`);
+      }
     }
     doc.rules = [...customRules, ...existing];
   }

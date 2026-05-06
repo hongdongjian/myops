@@ -245,6 +245,48 @@ configCmd
   });
 
 configCmd
+  .command('status')
+  .description('show conf directory git status')
+  .action(async () => {
+    const svc = makeConfigSvc();
+    try {
+      const info = await svc.status();
+      console.log(`conf: ${info.confDir}`);
+      if (!info.branch) {
+        console.log('not a git repository — run \'myops config init <github-url>\' to initialize');
+        return;
+      }
+      console.log(`remote: ${info.remoteUrl ?? 'not configured'}`);
+      console.log(`branch: ${info.branch}`);
+      console.log('');
+      if (info.changes.length === 0) {
+        console.log('nothing to commit, working tree clean');
+      } else {
+        console.log(`changes (${info.changes.length}):`);
+        for (const change of info.changes) {
+          console.log(`  ${change}`);
+        }
+      }
+      if (info.ahead.length > 0) {
+        console.log('');
+        console.log(`↑ ${info.ahead.length} commit(s) ahead of remote (run 'myops config upload' to push):`);
+        for (const c of info.ahead) console.log(`  ${c}`);
+      }
+      if (info.behind.length > 0) {
+        console.log('');
+        console.log(`↓ ${info.behind.length} commit(s) behind remote (run 'myops config update' to pull):`);
+        for (const c of info.behind) console.log(`  ${c}`);
+      }
+      if (info.ahead.length === 0 && info.behind.length === 0 && info.changes.length === 0) {
+        console.log('in sync with remote');
+      }
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+configCmd
   .command('update')
   .description('update conf directory from GitHub')
   .option('--force', 'discard all local changes before updating')
