@@ -25,6 +25,7 @@ interface Provider {
   haikuModel: string;
   sonnetModel: string;
   opusModel: string;
+  env: Record<string, string>;
 }
 
 interface ProvidersPayload {
@@ -38,7 +39,7 @@ const BASE_URL_PRESETS = [
   { label: 'Local', value: 'http://localhost:4141' },
 ];
 
-const empty: Provider = { name: '', baseUrl: '', token: '', model: '', haikuModel: '', sonnetModel: '', opusModel: '' };
+const empty: Provider = { name: '', baseUrl: '', token: '', model: '', haikuModel: '', sonnetModel: '', opusModel: '', env: {} };
 
 function BaseUrlField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -100,6 +101,7 @@ export function ClaudeProviders() {
         haikuModel: p.haikuModel,
         sonnetModel: p.sonnetModel,
         opusModel: p.opusModel,
+        env: p.env,
       }),
     onSuccess: () => {
       setEditing(null);
@@ -265,6 +267,65 @@ export function ClaudeProviders() {
                       onChange={(e) => setEditing({ ...editing, form: { ...editing.form, haikuModel: e.target.value } })}
                     />
                   </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Environment Variables</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+                <div className="space-y-1.5">
+                  {Object.entries(editing.form.env ?? {}).map(([k, v], idx) => (
+                    <div key={idx} className="flex gap-1.5 items-center">
+                      <Input
+                        value={k}
+                        placeholder="KEY"
+                        className="font-mono text-xs flex-1"
+                        onChange={(e) => {
+                          const newKey = e.target.value;
+                          const next: Record<string, string> = {};
+                          for (const [ek, ev] of Object.entries(editing.form.env ?? {})) {
+                            next[ek === k ? newKey : ek] = ev;
+                          }
+                          setEditing({ ...editing, form: { ...editing.form, env: next } });
+                        }}
+                      />
+                      <span className="text-muted-foreground text-xs">=</span>
+                      <Input
+                        value={v}
+                        placeholder="value"
+                        className="font-mono text-xs flex-1"
+                        onChange={(e) =>
+                          setEditing({ ...editing, form: { ...editing.form, env: { ...editing.form.env, [k]: e.target.value } } })
+                        }
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = { ...editing.form.env };
+                          delete next[k];
+                          setEditing({ ...editing, form: { ...editing.form, env: next } });
+                        }}
+                        className="text-muted-foreground hover:text-destructive transition-colors px-1 text-sm"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    disabled={'' in (editing.form.env ?? {})}
+                    onClick={() =>
+                      setEditing({ ...editing, form: { ...editing.form, env: { ...editing.form.env, '': '' } } })
+                    }
+                  >
+                    + Add Variable
+                  </Button>
                 </div>
               </div>
             </div>

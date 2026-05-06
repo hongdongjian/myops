@@ -74,6 +74,7 @@ export class ClaudeProvidersService {
         haikuModel: req.haikuModel.trim(),
         sonnetModel: (req.sonnetModel ?? '').trim(),
         opusModel: (req.opusModel ?? '').trim(),
+        env: req.env ?? {},
       },
     ];
     await this.writeStore(store);
@@ -96,6 +97,7 @@ export class ClaudeProvidersService {
         haikuModel: req.haikuModel.trim(),
         sonnetModel: (req.sonnetModel ?? '').trim(),
         opusModel: (req.opusModel ?? '').trim(),
+        env: req.env ?? {},
       };
     });
     if (!found) throw new AppError('NOT_FOUND', 'provider not found', 404);
@@ -158,6 +160,9 @@ export class ClaudeProvidersService {
     else delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
     if (haiku) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = haiku;
     else delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+    for (const [k, v] of Object.entries(found.env ?? {})) {
+      if (k) env[k] = v;
+    }
     m.env = env;
 
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });

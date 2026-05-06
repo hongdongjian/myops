@@ -29,6 +29,7 @@ interface PluginPresetStatus {
   package: string;
   marketplace: string;
   scope: string;
+  source?: string;
   marketplaceConfigured: boolean;
   installed: boolean;
   enabled: boolean;
@@ -252,7 +253,7 @@ export function ClaudePlugins() {
   };
 
   const openEdit = (p: PluginPresetStatus) => {
-    setEditForm({ name: p.name, package: p.package, description: p.description, source: '', link: p.link ?? '' });
+    setEditForm({ name: p.name, package: p.package, description: p.description, source: p.source ?? '', link: p.link ?? '' });
     setEditing(p.package);
   };
 

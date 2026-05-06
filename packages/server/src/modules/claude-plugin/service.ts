@@ -50,6 +50,9 @@ export function normalizePluginScope(scope: string | undefined): string {
 export function buildMarketplaceAddArgs(source: string, scope: string): string[] {
   return ['plugin', 'marketplace', 'add', source, '--scope', scope];
 }
+export function buildMarketplaceUpdateArgs(marketplace: string): string[] {
+  return ['plugin', 'marketplace', 'update', marketplace];
+}
 export function buildInstallArgs(packageId: string, scope: string): string[] {
   return ['plugin', 'install', packageId, '--scope', scope];
 }
@@ -126,6 +129,7 @@ export class ClaudePluginService {
         package: preset.package,
         marketplace,
         scope: preset.scope,
+        source: preset.source,
         marketplaceConfigured: marketplaceSet.has(marketplace),
         installed: !!inst,
         enabled: !!inst?.enabled,
@@ -241,6 +245,8 @@ export class ClaudePluginService {
     this.startOp(preset.package, 'updating');
     try {
       return await this.actionMu.runExclusive(async () => {
+        const { marketplace } = pluginPackageParts(preset.package);
+        await this.runClaude(buildMarketplaceUpdateArgs(marketplace));
         const result = await this.runClaude(buildUpdateArgs(preset.package, preset.scope));
         const runErr = errFromResult(result);
         return this.toActionResponse(preset.package, preset.scope, result, runErr);

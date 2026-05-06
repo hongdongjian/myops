@@ -69,6 +69,7 @@ export interface PluginPresetStatus {
   package: string;
   marketplace: string;
   scope: string;
+  source?: string;
   marketplaceConfigured: boolean;
   installed: boolean;
   enabled: boolean;

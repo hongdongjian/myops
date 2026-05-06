@@ -8,6 +8,7 @@ export const ClaudeProviderSchema = z.object({
   haikuModel: z.string().default(''),
   sonnetModel: z.string().default(''),
   opusModel: z.string().default(''),
+  env: z.record(z.string(), z.string()).default({}),
 });
 export type ClaudeProvider = z.infer<typeof ClaudeProviderSchema>;
 
@@ -23,6 +24,7 @@ export const ProviderUpdateRequestSchema = z.object({
   haikuModel: z.string().default(''),
   sonnetModel: z.string().default(''),
   opusModel: z.string().default(''),
+  env: z.record(z.string(), z.string()).default({}),
 });
 export type ProviderUpdateRequest = z.infer<typeof ProviderUpdateRequestSchema>;
 

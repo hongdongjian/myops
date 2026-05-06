@@ -195,6 +195,9 @@ program
     if (sonnet) env.ANTHROPIC_DEFAULT_SONNET_MODEL = sonnet;
     if (opus) env.ANTHROPIC_DEFAULT_OPUS_MODEL = opus;
     if (found.haikuModel) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = found.haikuModel;
+    for (const [k, v] of Object.entries(found.env ?? {})) {
+      if (k) env[k] = v;
+    }
 
     const child = spawn('claude', args, { env, stdio: 'inherit' });
     child.on('close', (code) => process.exit(code ?? 0));

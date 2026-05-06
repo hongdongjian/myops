@@ -135,8 +135,13 @@ export class ClaudeSettingsService {
     await fs.writeFile(templatePath, content);
 
     const settingsPath = this.settingsPath();
-    await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-    await fs.writeFile(settingsPath, content);
+    const incoming = JSON.parse(content) as JSONObject;
+    const existing = await readJSONObject(settingsPath);
+    const merged: JSONObject = { ...incoming };
+    for (const key of ['enabledPlugins', 'extraKnownMarketplaces', 'statusLine'] as const) {
+      if (key in existing) merged[key] = existing[key];
+    }
+    await writeJSONIndented(settingsPath, merged);
   }
 
   // ── onboarding ───────────────────────────────────────────────────────────
