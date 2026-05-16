@@ -23,6 +23,7 @@ import { codexSettingsModule } from './modules/codex-settings/routes.js';
 import { codexProvidersModule } from './modules/codex-providers/routes.js';
 import { schedulerModule } from './modules/scheduler/routes.js';
 import { clashModule } from './modules/clash/routes.js';
+import { quantumultxModule } from './modules/quantumultx/routes.js';
 import { fsModule } from './modules/fs/routes.js';
 import type { Deps } from './deps.js';
 
@@ -53,6 +54,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   await app.register(codexProvidersModule, { deps });
   await app.register(schedulerModule, { deps });
   await app.register(clashModule, { deps });
+  await app.register(quantumultxModule, { deps });
   await app.register(fsModule);
 
   const here = path.dirname(fileURLToPath(import.meta.url));

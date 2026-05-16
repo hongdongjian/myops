@@ -1,6 +1,6 @@
 {
   "name": "myops",
-  "version": "0.1.8",
+  "version": "0.1.10",
   "type": "module",
   "bin": {
     "myops": "dist/cli.js"

@@ -6,6 +6,7 @@ import { Claude } from './routes/claude';
 import { Codex } from './routes/codex';
 import { CronJobs } from './routes/cron';
 import { Clash } from './routes/clash';
+import { QuantumultX } from './routes/quantumultx';
 
 interface NavItem {
   to: string;
@@ -33,6 +34,7 @@ const navSections: NavSection[] = [
     items: [
       { to: '/cron', label: 'Cron', hint: 'cr' },
       { to: '/clash', label: 'Clash', hint: 'ch' },
+      { to: '/quantumultx', label: 'QuantumultX', hint: 'qx' },
     ],
   },
 ];
@@ -139,6 +141,7 @@ export function App() {
             <Route path="/codex/*" element={<Codex />} />
             <Route path="/cron/*" element={<CronJobs />} />
             <Route path="/clash/*" element={<Clash />} />
+            <Route path="/quantumultx/*" element={<QuantumultX />} />
           </Routes>
         </div>
       </main>
