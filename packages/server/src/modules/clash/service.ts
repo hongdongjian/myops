@@ -3,64 +3,224 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { Mutex } from 'async-mutex';
+import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import type { Deps } from '../../deps.js';
 import { AppError } from '../../core/errors.js';
-import type { ClashConfig, ClashProxy, ClashUpstreamInfo } from './schema.js';
+import {
+  CLASH_GROUPS,
+  emptyManifest,
+  type ClashConfig,
+  type ClashCustomRule,
+  type ClashManifest,
+  type ClashProxy,
+  type ClashResource,
+  type ClashResourceGroup,
+} from './schema.js';
+import { extractGroupNames, parseClashYaml, urlToFilename } from './parser.js';
 
 export const CLASH_FETCH_TIMEOUT_MS = 30 * 1000;
+export const CLASH_CONCURRENCY = 4;
 
-interface UpstreamCacheEntry {
-  fetchedAt: number;
-  raw: string;
-  info: ClashUpstreamInfo;
+function envProxy(): string | undefined {
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    process.env.ALL_PROXY ||
+    process.env.all_proxy ||
+    undefined
+  );
+}
+
+let cachedProxy: { url: string; agent: ProxyAgent } | null = null;
+function getProxyAgent(): ProxyAgent | undefined {
+  const url = envProxy();
+  if (!url) return undefined;
+  if (url.startsWith('socks')) return undefined;
+  if (cachedProxy?.url !== url) {
+    cachedProxy = { url, agent: new ProxyAgent(url) };
+  }
+  return cachedProxy.agent;
+}
+
+async function fetchWithProxy(
+  url: string,
+  signal: AbortSignal,
+): Promise<{ ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer> }> {
+  const dispatcher = getProxyAgent();
+  if (dispatcher) {
+    return undiciFetch(url, { signal, dispatcher }) as unknown as Promise<{
+      ok: boolean;
+      status: number;
+      arrayBuffer(): Promise<ArrayBuffer>;
+    }>;
+  }
+  return fetch(url, { signal }) as unknown as Promise<{
+    ok: boolean;
+    status: number;
+    arrayBuffer(): Promise<ArrayBuffer>;
+  }>;
 }
 
 export class ClashService {
-  private cache: UpstreamCacheEntry | null = null;
-  private readonly cacheMu = new Mutex();
+  private readonly mu = new Mutex();
 
   constructor(private readonly deps: Deps) {}
 
+  rootDir(): string {
+    return this.deps.paths.confPath('clash');
+  }
+  dataDir(): string {
+    return this.deps.paths.dataPath('clash');
+  }
+  templatePath(): string {
+    return path.join(this.rootDir(), 'template.yaml');
+  }
   configPath(): string {
-    return path.join(this.deps.paths.rootDir, 'conf', 'clash', 'config.json');
+    return path.join(this.dataDir(), 'config.json');
+  }
+  customPath(): string {
+    return path.join(this.rootDir(), 'custom.json');
+  }
+  private legacyConfigPath(): string {
+    return path.join(this.rootDir(), 'config.json');
+  }
+  manifestPath(): string {
+    return path.join(this.dataDir(), 'manifest.json');
+  }
+  groupDir(group: ClashResourceGroup): string {
+    return path.join(this.dataDir(), 'resources', group);
+  }
+  customRuleListPath(id: string): string {
+    return path.join(this.groupDir('list'), `custom-${id}.list`);
+  }
+  customRuleFilename(id: string): string {
+    return `custom-${id}.list`;
   }
 
   async loadConfig(): Promise<ClashConfig> {
-    try {
-      const data = await fsp.readFile(this.configPath(), 'utf-8');
-      return JSON.parse(data) as ClashConfig;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { subscribe_url: '', refresh_interval_minutes: 60, custom_proxies: [], groups: [], rule_sets: [] };
+    const machine = await this.readJsonFile(this.configPath());
+    let custom = await this.readJsonFile(this.customPath());
+    // legacy fallbacks
+    const legacyData = machine ?? (await this.readJsonFile(this.legacyConfigPath()));
+    if (!custom && legacyData) {
+      const hasCustom =
+        Array.isArray((legacyData as any).custom_proxies) ||
+        Array.isArray((legacyData as any).custom_rules);
+      if (hasCustom) {
+        custom = {
+          custom_proxies: Array.isArray((legacyData as any).custom_proxies)
+            ? (legacyData as any).custom_proxies
+            : [],
+          custom_rules: Array.isArray((legacyData as any).custom_rules)
+            ? (legacyData as any).custom_rules
+            : [],
+        };
+        await this.writeJsonFile(this.customPath(), custom);
       }
-      throw new AppError('CLASH_CONFIG_READ', `failed to read clash config: ${(err as Error).message}`, 500);
     }
+    const merged = machine ?? legacyData ?? {};
+    return {
+      api_key: typeof (merged as any).api_key === 'string' ? (merged as any).api_key : undefined,
+      public_base_url:
+        typeof (merged as any).public_base_url === 'string'
+          ? (merged as any).public_base_url
+          : undefined,
+      custom_proxies: Array.isArray((custom as any)?.custom_proxies)
+        ? ((custom as any).custom_proxies as ClashProxy[])
+        : Array.isArray((merged as any).custom_proxies)
+          ? ((merged as any).custom_proxies as ClashProxy[])
+          : [],
+      custom_rules: Array.isArray((custom as any)?.custom_rules)
+        ? ((custom as any).custom_rules as ClashCustomRule[])
+        : Array.isArray((merged as any).custom_rules)
+          ? ((merged as any).custom_rules as ClashCustomRule[])
+          : [],
+    };
+  }
+
+  private async readJsonFile(p: string): Promise<Record<string, unknown> | null> {
+    let data: string;
+    try {
+      data = await fsp.readFile(p, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new AppError('CLASH_CONFIG_READ', `failed to read ${p}: ${(err as Error).message}`, 500);
+    }
+    if (!data.trim()) return null;
+    try {
+      return JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeJsonFile(target: string, obj: unknown): Promise<void> {
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    await fsp.writeFile(tmp, JSON.stringify(obj, null, 2));
+    await fsp.rename(tmp, target);
+  }
+
+  private defaultConfig(): ClashConfig {
+    return { custom_proxies: [], custom_rules: [] };
   }
 
   async saveConfig(cfg: ClashConfig): Promise<void> {
-    await fsp.mkdir(path.dirname(this.configPath()), { recursive: true });
-    await fsp.writeFile(this.configPath(), JSON.stringify(cfg, null, 2));
+    const machine: Record<string, unknown> = {};
+    if (cfg.api_key) machine.api_key = cfg.api_key;
+    if (cfg.public_base_url) machine.public_base_url = cfg.public_base_url;
+    await this.writeJsonFile(this.configPath(), machine);
+    await this.writeJsonFile(this.customPath(), {
+      custom_proxies: cfg.custom_proxies,
+      custom_rules: cfg.custom_rules,
+    });
+    await fsp.unlink(this.legacyConfigPath()).catch(() => undefined);
   }
 
-  async getUpstreamCached(cfg: ClashConfig, forceRefresh: boolean): Promise<{ raw: string; info: ClashUpstreamInfo }> {
-    const ttlMs = (cfg.refresh_interval_minutes ?? 60) * 60 * 1000;
-    const release = await this.cacheMu.acquire();
+  async loadTemplate(): Promise<string> {
     try {
-      if (
-        !forceRefresh &&
-        this.cache &&
-        Date.now() - this.cache.fetchedAt < ttlMs
-      ) {
-        return { raw: this.cache.raw, info: { ...this.cache.info, fetchedAt: this.cache.fetchedAt } };
-      }
-      const raw = await fetchUpstreamRaw(cfg.subscribe_url);
-      const info = parseUpstreamInfo(raw);
-      const fetchedAt = Date.now();
-      this.cache = { fetchedAt, raw, info };
-      return { raw, info: { ...info, fetchedAt } };
-    } finally {
-      release();
+      return await fsp.readFile(this.templatePath(), 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw new AppError('CLASH_TEMPLATE_READ', `failed to read template: ${(err as Error).message}`, 500);
     }
+  }
+
+  async saveTemplate(text: string): Promise<void> {
+    await fsp.mkdir(this.rootDir(), { recursive: true });
+    await fsp.writeFile(this.templatePath(), text);
+  }
+
+  async loadManifest(): Promise<ClashManifest> {
+    let data: string;
+    try {
+      data = await fsp.readFile(this.manifestPath(), 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return emptyManifest();
+      throw new AppError('CLASH_MANIFEST_READ', `failed to read manifest: ${(err as Error).message}`, 500);
+    }
+    if (!data.trim()) return emptyManifest();
+    let parsed: Partial<ClashManifest>;
+    try {
+      parsed = JSON.parse(data) as Partial<ClashManifest>;
+    } catch {
+      return emptyManifest();
+    }
+    const m = emptyManifest();
+    for (const g of CLASH_GROUPS) {
+      if (Array.isArray(parsed[g])) m[g] = parsed[g] as ClashResource[];
+    }
+    return m;
+  }
+
+  async saveManifest(m: ClashManifest): Promise<void> {
+    await fsp.mkdir(this.dataDir(), { recursive: true });
+    const target = this.manifestPath();
+    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    await fsp.writeFile(tmp, JSON.stringify(m, null, 2));
+    await fsp.rename(tmp, target);
   }
 
   async rotateApiKey(): Promise<string> {
@@ -70,139 +230,347 @@ export class ClashService {
     return newKey;
   }
 
-  async buildSubscribe(cfg: ClashConfig): Promise<string> {
-    if (!cfg.subscribe_url) {
-      throw new AppError('CLASH_NO_URL', 'subscribe URL not configured', 400);
-    }
-    const { raw } = await this.getUpstreamCached(cfg, false);
-    return mergeClashConfig(raw, cfg);
+  async getGroupNames(): Promise<string[]> {
+    const text = await this.loadTemplate();
+    return extractGroupNames(text);
   }
-}
 
-async function fetchUpstreamRaw(url: string): Promise<string> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), CLASH_FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { signal: ctrl.signal });
-    if (!res.ok) {
-      throw new AppError('CLASH_UPSTREAM', `upstream returned status ${res.status}`, 502);
-    }
-    return await res.text();
-  } catch (err) {
-    if (err instanceof AppError) throw err;
-    throw new AppError('CLASH_UPSTREAM', `failed to fetch upstream: ${(err as Error).message}`, 502);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+  /**
+   * Sync manifest from current template + custom rules.
+   * Preserves manual entries; rebuilds remote and local-custom entries.
+   */
+  async syncManifest(): Promise<ClashManifest> {
+    const text = await this.loadTemplate();
+    const parsed = parseClashYaml(text);
+    const cfg = await this.loadConfig();
+    const release = await this.mu.acquire();
+    try {
+      const current = await this.loadManifest();
+      const next: ClashManifest = emptyManifest();
 
-export function parseUpstreamInfo(raw: string): ClashUpstreamInfo {
-  let doc: unknown;
-  try {
-    doc = YAML.parse(raw);
-  } catch (err) {
-    throw new AppError('CLASH_PARSE', `failed to parse upstream YAML: ${(err as Error).message}`, 500);
-  }
-  const proxies: string[] = [];
-  const groups: string[] = [];
-  if (doc && typeof doc === 'object') {
-    const d = doc as Record<string, unknown>;
-    const proxyList = d.proxies;
-    if (Array.isArray(proxyList)) {
-      for (const p of proxyList) {
-        if (p && typeof p === 'object' && typeof (p as any).name === 'string') {
-          proxies.push((p as any).name);
+      for (const group of CLASH_GROUPS) {
+        const remoteUrls = (parsed[group] as string[]) ?? [];
+        const remoteSet = new Set(remoteUrls);
+        void remoteSet;
+
+        const manual = current[group].filter((r) => r.source === 'manual');
+        const manualUrlSet = new Set(manual.map((r) => r.url));
+
+        const existingRemoteByUrl = new Map(
+          current[group].filter((r) => r.source === 'remote').map((r) => [r.url, r] as const),
+        );
+
+        const remoteEntries: ClashResource[] = remoteUrls
+          .filter((u) => !manualUrlSet.has(u))
+          .map((url) => {
+            const existing = existingRemoteByUrl.get(url);
+            if (existing) return existing;
+            return {
+              url,
+              filename: this.uniqueFilenameFor(url, group, manual),
+              source: 'remote' as const,
+            };
+          });
+
+        const seen = new Set<string>();
+        const merged: ClashResource[] = [...remoteEntries, ...manual].map((e) => {
+          let fn = e.filename;
+          if (seen.has(fn)) {
+            fn = this.uniqueFilenameFor(e.url, group, [{ filename: fn } as ClashResource], seen);
+          }
+          seen.add(fn);
+          return { ...e, filename: fn };
+        });
+
+        if (group === 'list') {
+          const localBaseUrl = this.localPlaceholderBase();
+          for (const rule of cfg.custom_rules) {
+            const filename = this.customRuleFilename(rule.id);
+            if (seen.has(filename)) continue;
+            seen.add(filename);
+            merged.push({
+              url: `${localBaseUrl}/${filename}`,
+              filename,
+              source: 'local',
+            });
+          }
         }
-      }
-    }
-    const groupList = d['proxy-groups'];
-    if (Array.isArray(groupList)) {
-      for (const g of groupList) {
-        if (g && typeof g === 'object' && typeof (g as any).name === 'string') {
-          groups.push((g as any).name);
-        }
-      }
-    }
-  }
-  return { proxies, groups };
-}
 
-function serializeProxy(p: ClashProxy): Record<string, unknown> {
-  return p as Record<string, unknown>;
-}
-
-export function mergeClashConfig(upstreamRaw: string, cfg: ClashConfig): string {
-  const doc = (YAML.parse(upstreamRaw) ?? {}) as Record<string, unknown>;
-  const upstreamProxyNames: string[] = [];
-  if (Array.isArray(doc.proxies)) {
-    for (const p of doc.proxies as unknown[]) {
-      if (p && typeof p === 'object' && typeof (p as any).name === 'string') {
-        upstreamProxyNames.push((p as any).name);
+        next[group] = merged;
       }
+
+      await this.saveManifest(next);
+      return next;
+    } finally {
+      release();
     }
   }
 
-  const customProxies = cfg.custom_proxies ?? [];
-  if (customProxies.length > 0) {
-    const serialized = customProxies.map(serializeProxy);
+  private localPlaceholderBase(): string {
+    return 'local://clash/list';
+  }
+
+  uniqueFilenameFor(
+    url: string,
+    _group: ClashResourceGroup,
+    existing: { filename: string }[],
+    extra?: Set<string>,
+  ): string {
+    const base = urlToFilename(url);
+    const used = new Set([...existing.map((e) => e.filename), ...(extra ? Array.from(extra) : [])]);
+    if (!used.has(base)) return base;
+    const hash = crypto.createHash('sha1').update(url).digest('hex').slice(0, 8);
+    const dot = base.lastIndexOf('.');
+    return dot > 0 ? `${base.slice(0, dot)}-${hash}${base.slice(dot)}` : `${base}-${hash}`;
+  }
+
+  async refresh(group?: ClashResourceGroup, url?: string): Promise<ClashManifest> {
+    if (url) {
+      const g = group;
+      if (!g) throw new AppError('CLASH_REFRESH', 'group is required when url is provided', 400);
+      return this.refreshSingle(g, url);
+    }
+    await this.syncManifest();
+    const groups: ClashResourceGroup[] = group ? [group] : [...CLASH_GROUPS];
+    const manifest = await this.loadManifest();
+    const targets: { group: ClashResourceGroup; url: string }[] = [];
+    for (const g of groups) {
+      await fsp.mkdir(this.groupDir(g), { recursive: true });
+      for (const e of manifest[g]) {
+        if (e.source === 'local') continue;
+        targets.push({ group: g, url: e.url });
+      }
+    }
+
+    for (let i = 0; i < targets.length; i += CLASH_CONCURRENCY) {
+      const batch = targets.slice(i, i + CLASH_CONCURRENCY);
+      await Promise.all(batch.map((t) => this.refreshSingle(t.group, t.url).catch(() => undefined)));
+    }
+
+    const release = await this.mu.acquire();
+    try {
+      const next = await this.loadManifest();
+      for (const g of groups) await this.cleanupGroup(g, next[g]);
+      return next;
+    } finally {
+      release();
+    }
+  }
+
+  private async refreshSingle(group: ClashResourceGroup, url: string): Promise<ClashManifest> {
+    const manifest = await this.loadManifest();
+    const entry = manifest[group].find((e) => e.url === url);
+    if (!entry) {
+      throw new AppError('CLASH_NOT_FOUND', `url not in manifest: ${url}`, 404);
+    }
+    if (entry.source === 'local') return manifest;
+    await fsp.mkdir(this.groupDir(group), { recursive: true });
+    const result: ClashResource = { ...entry };
+    await this.downloadOne(group, result);
+
+    const release = await this.mu.acquire();
+    try {
+      const cur = await this.loadManifest();
+      const idx = cur[group].findIndex((e) => e.url === url);
+      if (idx >= 0) {
+        const prev = cur[group][idx]!;
+        cur[group][idx] = {
+          ...prev,
+          size: result.size,
+          updatedAt: result.updatedAt,
+          error: result.error,
+        };
+        await this.saveManifest(cur);
+      }
+      return cur;
+    } finally {
+      release();
+    }
+  }
+
+  private async downloadOne(group: ClashResourceGroup, entry: ClashResource): Promise<void> {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), CLASH_FETCH_TIMEOUT_MS);
+      let buf: Buffer;
+      try {
+        const res = await fetchWithProxy(entry.url, ctrl.signal);
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const ab = await res.arrayBuffer();
+        buf = Buffer.from(ab);
+      } finally {
+        clearTimeout(timer);
+      }
+      const dest = path.join(this.groupDir(group), entry.filename);
+      await fsp.writeFile(dest, buf);
+      entry.size = buf.byteLength;
+      entry.updatedAt = Date.now();
+      entry.error = undefined;
+    } catch (err) {
+      const usedProxy = envProxy();
+      const cause = (err as Error & { cause?: { code?: string; message?: string } }).cause;
+      const reason = cause?.message ?? cause?.code ?? (err as Error).message;
+      entry.error = usedProxy
+        ? `${reason}（代理: ${usedProxy}）`
+        : `${reason}（提示：可设置 HTTPS_PROXY 环境变量）`;
+    }
+  }
+
+  private async cleanupGroup(group: ClashResourceGroup, entries: ClashResource[]): Promise<void> {
+    const dir = this.groupDir(group);
+    let files: string[];
+    try {
+      files = await fsp.readdir(dir);
+    } catch {
+      return;
+    }
+    const keep = new Set(entries.map((e) => e.filename));
+    for (const f of files) {
+      if (!keep.has(f)) {
+        await fsp.unlink(path.join(dir, f)).catch(() => undefined);
+      }
+    }
+  }
+
+  async addManual(group: ClashResourceGroup, url: string): Promise<ClashManifest> {
+    const release = await this.mu.acquire();
+    try {
+      const manifest = await this.loadManifest();
+      if (manifest[group].some((e) => e.url === url)) {
+        throw new AppError('CLASH_DUPLICATE', 'URL already exists in this group', 409);
+      }
+      const entry: ClashResource = {
+        url,
+        filename: this.uniqueFilenameFor(url, group, manifest[group]),
+        source: 'manual',
+      };
+      manifest[group] = [...manifest[group], entry];
+      await this.saveManifest(manifest);
+      return manifest;
+    } finally {
+      release();
+    }
+  }
+
+  async removeEntry(group: ClashResourceGroup, filename: string): Promise<ClashManifest> {
+    const release = await this.mu.acquire();
+    try {
+      const manifest = await this.loadManifest();
+      manifest[group] = manifest[group].filter((e) => e.filename !== filename);
+      await fsp.unlink(path.join(this.groupDir(group), filename)).catch(() => undefined);
+      await this.saveManifest(manifest);
+      return manifest;
+    } finally {
+      release();
+    }
+  }
+
+  async resolveStaticPath(group: ClashResourceGroup, filename: string): Promise<string> {
+    const safe = path.basename(filename);
+    const full = path.join(this.groupDir(group), safe);
+    await fsp.access(full);
+    return full;
+  }
+
+  /**
+   * Persist all custom_rules in cfg as local .list files under data/clash/resources/list/.
+   * Deletes any stale custom-*.list that no longer matches a rule.
+   */
+  async writeCustomRuleFiles(cfg: ClashConfig): Promise<void> {
+    await fsp.mkdir(this.groupDir('list'), { recursive: true });
+    const keep = new Set(cfg.custom_rules.map((r) => this.customRuleFilename(r.id)));
+    for (const rule of cfg.custom_rules) {
+      const dest = this.customRuleListPath(rule.id);
+      const validRules = rule.rules.filter((r) => {
+        const trimmed = r.trim();
+        return trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('//');
+      });
+      const content = validRules.join('\n') + (validRules.length ? '\n' : '');
+      await fsp.writeFile(dest, content);
+    }
+    const dir = this.groupDir('list');
+    let files: string[];
+    try {
+      files = await fsp.readdir(dir);
+    } catch {
+      return;
+    }
+    for (const f of files) {
+      if (f.startsWith('custom-') && f.endsWith('.list') && !keep.has(f)) {
+        await fsp.unlink(path.join(dir, f)).catch(() => undefined);
+      }
+    }
+  }
+
+  /**
+   * Build subscribe yaml: parse template, inject custom_proxies, inject custom_rules as
+   * rule-providers + prepend RULE-SET lines, and replace remote resource URLs with local
+   * /api/clash/static/<group>/<filename>.
+   */
+  async buildSubscribe(baseUrl: string): Promise<string> {
+    const text = await this.loadTemplate();
+    if (!text.trim()) {
+      throw new AppError('CLASH_NO_TEMPLATE', '请先在 Clash 管理中保存 YAML 模板', 400);
+    }
+    const cfg = await this.loadConfig();
+    const manifest = await this.loadManifest();
+    return buildClashSubscribe(text, cfg, manifest, baseUrl);
+  }
+}
+
+export function buildClashSubscribe(
+  templateText: string,
+  cfg: ClashConfig,
+  manifest: ClashManifest,
+  baseUrl: string,
+): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  let doc: Record<string, unknown>;
+  try {
+    doc = (YAML.parse(templateText) ?? {}) as Record<string, unknown>;
+  } catch (err) {
+    throw new AppError('CLASH_TEMPLATE_PARSE', `模板 YAML 解析失败: ${(err as Error).message}`, 400);
+  }
+
+  if (cfg.custom_proxies.length > 0) {
     const existingProxies = Array.isArray(doc.proxies) ? (doc.proxies as unknown[]) : [];
-    doc.proxies = [...serialized, ...existingProxies];
-    for (const p of customProxies) upstreamProxyNames.push(p.name);
+    doc.proxies = [...cfg.custom_proxies.map((p) => p as Record<string, unknown>), ...existingProxies];
   }
 
-  if (cfg.groups.length > 0) {
-    const existing = Array.isArray(doc['proxy-groups']) ? (doc['proxy-groups'] as unknown[]) : [];
-    const additions = cfg.groups.map((g) => {
-      const proxies =
-        g.keywords && g.keywords.length > 0
-          ? upstreamProxyNames.filter((name) =>
-              g.keywords.some((kw) => name.toLowerCase().includes(kw.toLowerCase())),
-            )
-          : [...g.proxies];
-      const entry: Record<string, unknown> = { name: g.name, type: g.type, proxies };
-      if (g.url) entry.url = g.url;
-      if (g.interval !== undefined) entry.interval = g.interval;
-      if (g.timeout !== undefined) entry.timeout = g.timeout;
-      if (g.tolerance !== undefined) entry.tolerance = g.tolerance;
-      if (g.lazy !== undefined) entry.lazy = g.lazy;
-      if (g.max_failed_times !== undefined) entry['max-failed-times'] = g.max_failed_times;
-      if (g.strategy) entry.strategy = g.strategy;
-      return entry;
-    });
-    const injected = existing.map((eg) => {
-      if (eg && typeof eg === 'object' && (eg as any).type === 'select' && Array.isArray((eg as any).proxies)) {
-        const upstreamName: string = (eg as any).name ?? '';
-        const groupsToInject = cfg.groups
-          .filter((g) => g.inject_into?.length && g.inject_into.includes(upstreamName))
-          .map((g) => g.name);
-        return { ...(eg as object), proxies: [...groupsToInject, ...(eg as any).proxies] };
-      }
-      return eg;
-    });
-    const additionsWithInjections = additions.map((ga) => {
-      if ((ga as any).type !== 'select') return ga;
-      const gaName = (ga as any).name as string;
-      const toInject = cfg.groups
-        .filter((g) => g.inject_into?.includes(gaName) && g.name !== gaName)
-        .map((g) => g.name);
-      if (toInject.length === 0) return ga;
-      return { ...(ga as object), proxies: [...toInject, ...((ga as any).proxies ?? [])] };
-    });
-    doc['proxy-groups'] = [...injected, ...additionsWithInjections];
-  }
-
-  if (cfg.rule_sets.length > 0) {
-    const existing = Array.isArray(doc.rules) ? (doc.rules as unknown[]) : [];
-    const customRules: string[] = [];
-    for (const rs of cfg.rule_sets) {
-      if (rs.enabled === false) continue;
-      for (const rule of rs.rules) {
-        if (rule.trim().startsWith('#')) continue;
-        customRules.push(`${rule},${rs.group}`);
-      }
+  const enabledRules = cfg.custom_rules.filter((r) => r.enabled !== false);
+  if (enabledRules.length > 0) {
+    const providers = (doc['rule-providers'] && typeof doc['rule-providers'] === 'object'
+      ? (doc['rule-providers'] as Record<string, unknown>)
+      : {}) as Record<string, unknown>;
+    for (const rule of enabledRules) {
+      providers[rule.name] = {
+        type: 'http',
+        behavior: rule.behavior,
+        format: 'text',
+        interval: 86400,
+        url: `${base}/api/clash/static/list/custom-${rule.id}.list`,
+      };
     }
-    doc.rules = [...customRules, ...existing];
+    doc['rule-providers'] = providers;
+
+    const existing = Array.isArray(doc.rules) ? (doc.rules as unknown[]) : [];
+    const prepend = enabledRules.map((r) => `RULE-SET,${r.name},${r.target_group}`);
+    doc.rules = [...prepend, ...existing];
   }
 
-  return YAML.stringify(doc);
+  let out = YAML.stringify(doc);
+
+  const mapping = new Map<string, string>();
+  for (const group of CLASH_GROUPS) {
+    for (const entry of manifest[group]) {
+      if (entry.source === 'local') continue;
+      mapping.set(entry.url, `${base}/api/clash/static/${group}/${encodeURIComponent(entry.filename)}`);
+    }
+  }
+  const sortedUrls = Array.from(mapping.keys()).sort((a, b) => b.length - a.length);
+  for (const url of sortedUrls) {
+    const local = mapping.get(url)!;
+    out = out.split(url).join(local);
+  }
+  return out;
 }

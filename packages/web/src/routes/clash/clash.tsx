@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet, api } from '@/lib/api';
+import { api, apiGet, apiPost } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,287 +17,633 @@ import { useToast } from '@/components/toast';
 import { cn } from '@/lib/cn';
 import { type ClashProxy, ProxyDialog } from './proxy-dialog';
 
-interface ClashGroup {
-  name: string;
-  type: string;
-  proxies: string[];
-  keywords: string[];
-  inject_into?: string[];
-  url?: string;
-  interval?: number;
-  timeout?: number;
-  tolerance?: number;
-  lazy?: boolean;
-  max_failed_times?: number;
-  strategy?: string;
-}
+type ClashResourceGroup = 'list' | 'icon';
+const RESOURCE_GROUPS: ClashResourceGroup[] = ['list', 'icon'];
+const GROUP_LABELS: Record<ClashResourceGroup, string> = {
+  list: 'list (规则/订阅)',
+  icon: 'icon (分组图标)',
+};
 
-interface ClashRuleSet {
+type RuleBehavior = 'classical' | 'domain' | 'ipcidr';
+
+interface ClashCustomRule {
+  id: string;
   name: string;
-  group: string;
+  target_group: string;
+  behavior: RuleBehavior;
   rules: string[];
-  enabled?: boolean;
+  enabled: boolean;
 }
 
 interface ClashConfig {
-  subscribe_url: string;
-  refresh_interval_minutes: number;
   api_key?: string;
-  custom_proxies?: ClashProxy[];
-  groups: ClashGroup[];
-  rule_sets: ClashRuleSet[];
+  public_base_url?: string;
+  custom_proxies: ClashProxy[];
+  custom_rules: ClashCustomRule[];
 }
 
-interface UpstreamInfo {
-  proxies: string[];
-  groups: string[];
-  fetchedAt?: number;
+interface ClashResource {
+  url: string;
+  filename: string;
+  source: 'remote' | 'manual' | 'local';
+  size?: number;
+  updatedAt?: number;
+  error?: string;
 }
-
-const GROUP_TYPES = ['select', 'url-test', 'fallback', 'load-balance'] as const;
-type GroupType = (typeof GROUP_TYPES)[number];
-
-const LOAD_BALANCE_STRATEGIES = ['round-robin', 'consistent-hashing', 'sticky-sessions'] as const;
-
-const DEFAULT_TEST_URL = 'http://www.gstatic.com/generate_204';
+type ClashManifest = Record<ClashResourceGroup, ClashResource[]>;
 
 const apiPut = (path: string, body: unknown) =>
   api(path, { method: 'PUT', body: JSON.stringify(body) });
+const apiDelete = (path: string, body: unknown) =>
+  api(path, { method: 'DELETE', body: JSON.stringify(body) });
 
-function matchedProxies(group: ClashGroup, upstreamProxies: string[]): string[] {
-  if (!group.keywords || group.keywords.length === 0) return group.proxies;
-  return upstreamProxies.filter((name) =>
-    group.keywords.some((kw) => name.toLowerCase().includes(kw.toLowerCase())),
-  );
+function fmtTime(ts?: number): string {
+  if (!ts) return '-';
+  return new Date(ts).toLocaleString();
+}
+function fmtBytes(n?: number): string {
+  if (n === undefined) return '-';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
-function InfoIcon({ title }: { title: string }) {
-  return (
-    <span
-      title={title}
-      className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-border bg-muted text-[10px] text-muted-foreground hover:border-primary hover:text-primary transition-colors"
-    >
-      ?
-    </span>
-  );
+function randomId(): string {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
-interface GroupDialogProps {
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-  initial?: ClashGroup | null;
-  upstreamGroupNames: string[];
-  customGroupNames: string[];
-  onSubmit: (g: ClashGroup) => void;
-}
+export function ClashTab() {
+  const qc = useQueryClient();
+  const toast = useToast();
 
-function GroupDialog({ open, onOpenChange, initial, upstreamGroupNames, customGroupNames, onSubmit }: GroupDialogProps) {
-  const [name, setName] = useState('');
-  const [type, setType] = useState<GroupType>('select');
-  const [keywordsText, setKeywordsText] = useState('');
-  const [injectInto, setInjectInto] = useState<string[]>([]);
-  const [url, setUrl] = useState(DEFAULT_TEST_URL);
-  const [interval, setInterval] = useState(300);
-  const [timeout, setTimeout] = useState(5000);
-  const [tolerance, setTolerance] = useState(150);
-  const [lazy, setLazy] = useState(true);
-  const [maxFailedTimes, setMaxFailedTimes] = useState(5);
-  const [strategy, setStrategy] = useState<string>('round-robin');
+  const configQuery = useQuery<ClashConfig>({
+    queryKey: ['clash', 'config'],
+    queryFn: () => apiGet<ClashConfig>('/api/clash/config'),
+  });
+  const templateQuery = useQuery<{ content: string }>({
+    queryKey: ['clash', 'template'],
+    queryFn: () => apiGet('/api/clash/template'),
+  });
+  const manifestQuery = useQuery<ClashManifest>({
+    queryKey: ['clash', 'resources'],
+    queryFn: () => apiGet('/api/clash/resources'),
+  });
+  const groupsQuery = useQuery<{ groups: string[] }>({
+    queryKey: ['clash', 'groups'],
+    queryFn: () => apiGet('/api/clash/groups'),
+  });
 
-  useEffect(() => {
-    if (open) {
-      setName(initial?.name ?? '');
-      setType((initial?.type as GroupType) ?? 'select');
-      setKeywordsText((initial?.keywords ?? []).join(', '));
-      setInjectInto(initial?.inject_into ?? []);
-      setUrl(initial?.url ?? DEFAULT_TEST_URL);
-      setInterval(initial?.interval ?? 300);
-      setTimeout(initial?.timeout ?? 5000);
-      setTolerance(initial?.tolerance ?? 150);
-      setLazy(initial?.lazy ?? true);
-      setMaxFailedTimes(initial?.max_failed_times ?? 5);
-      setStrategy(initial?.strategy ?? 'round-robin');
+  const cfg = configQuery.data;
+  const groupNames = groupsQuery.data?.groups ?? [];
+
+  const [draft, setDraft] = useState<string | null>(null);
+  const content = draft ?? templateQuery.data?.content ?? '';
+
+  const [proxyDialogOpen, setProxyDialogOpen] = useState(false);
+  const [editingProxy, setEditingProxy] = useState<ClashProxy | null>(null);
+  const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
+  const [editingRule, setEditingRule] = useState<ClashCustomRule | null>(null);
+
+  const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
+  const refreshKey = (g: ClashResourceGroup, url: string) => `${g}:${url}`;
+
+  const saveTemplate = useMutation({
+    mutationFn: (text: string) => apiPut('/api/clash/template', { content: text }),
+    onSuccess: () => {
+      toast.success('YAML 模板已保存，资源开始后台下载');
+      setDraft(null);
+      qc.invalidateQueries({ queryKey: ['clash', 'template'] });
+      qc.invalidateQueries({ queryKey: ['clash', 'resources'] });
+      qc.invalidateQueries({ queryKey: ['clash', 'groups'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const saveConfig = useMutation({
+    mutationFn: (next: ClashConfig) => apiPut('/api/clash/config', next),
+    onSuccess: () => {
+      toast.success('已保存');
+      qc.invalidateQueries({ queryKey: ['clash', 'config'] });
+      qc.invalidateQueries({ queryKey: ['clash', 'resources'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const rotateKey = useMutation({
+    mutationFn: () => apiPost('/api/clash/subscribe/rotate-key'),
+    onSuccess: () => {
+      toast.success('订阅密钥已轮换');
+      qc.invalidateQueries({ queryKey: ['clash', 'config'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const saveBaseUrl = useMutation({
+    mutationFn: (base: string) => {
+      const current = cfg ?? { custom_proxies: [], custom_rules: [] };
+      const next: ClashConfig = { ...current, public_base_url: base || undefined };
+      return apiPut('/api/clash/config', next);
+    },
+    onSuccess: () => {
+      toast.success('公网地址已保存');
+      qc.invalidateQueries({ queryKey: ['clash', 'config'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const addResource = useMutation({
+    mutationFn: (body: { group: ClashResourceGroup; url: string }) =>
+      apiPost('/api/clash/resources/add', body),
+    onSuccess: (_d, vars) => {
+      toast.success('已新增资源，开始下载…');
+      qc.invalidateQueries({ queryKey: ['clash', 'resources'] });
+      refreshOne(vars.group, vars.url);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const removeResource = useMutation({
+    mutationFn: (body: { group: ClashResourceGroup; filename: string }) =>
+      apiDelete('/api/clash/resources', body),
+    onSuccess: () => {
+      toast.success('已删除资源');
+      qc.invalidateQueries({ queryKey: ['clash', 'resources'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  async function refreshOne(group: ClashResourceGroup, url: string): Promise<void> {
+    const key = refreshKey(group, url);
+    setRefreshing((s) => new Set(s).add(key));
+    try {
+      await apiPost('/api/clash/resources/refresh', { group, url });
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setRefreshing((s) => {
+        const next = new Set(s);
+        next.delete(key);
+        return next;
+      });
+      qc.invalidateQueries({ queryKey: ['clash', 'resources'] });
     }
-  }, [open, initial]);
+  }
 
-  const hasHealthCheck = type === 'url-test' || type === 'fallback' || type === 'load-balance';
-
-  const toggleInjectInto = (g: string) =>
-    setInjectInto((prev) => prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const keywords = keywordsText
-      .split(',')
-      .map((k) => k.trim())
-      .filter(Boolean);
-    const g: ClashGroup = { name, type, proxies: [], keywords, inject_into: injectInto };
-    if (hasHealthCheck) {
-      g.url = url;
-      g.interval = interval;
-      g.timeout = timeout;
-      g.lazy = lazy;
-      g.max_failed_times = maxFailedTimes;
+  async function refreshAll(group?: ClashResourceGroup): Promise<void> {
+    const manifest = manifestQuery.data;
+    if (!manifest) return;
+    const groups: ClashResourceGroup[] = group ? [group] : RESOURCE_GROUPS;
+    const tasks: { group: ClashResourceGroup; url: string }[] = [];
+    for (const g of groups) {
+      for (const e of manifest[g]) {
+        if (e.source === 'local') continue;
+        tasks.push({ group: g, url: e.url });
+      }
     }
-    if (type === 'url-test') g.tolerance = tolerance;
-    if (type === 'load-balance') g.strategy = strategy;
-    onSubmit(g);
+    if (tasks.length === 0) return;
+    setRefreshing((s) => {
+      const next = new Set(s);
+      for (const t of tasks) next.add(refreshKey(t.group, t.url));
+      return next;
+    });
+    await Promise.all(tasks.map((t) => refreshOne(t.group, t.url)));
+    toast.success(group ? `${group} 已刷新` : '全部资源已刷新');
+  }
+
+  const subscribeUrl = useMemo(() => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3333';
+    const key = cfg?.api_key;
+    return key ? `${origin}/api/clash/subscribe?api-key=${key}` : `${origin}/api/clash/subscribe`;
+  }, [cfg?.api_key]);
+
+  const anyRefreshing = refreshing.size > 0;
+
+  const handleProxySubmit = (p: ClashProxy) => {
+    if (!cfg) return;
+    const existing = cfg.custom_proxies ?? [];
+    const updated = editingProxy
+      ? existing.map((x) => (x.name === editingProxy.name ? p : x))
+      : [...existing, p];
+    saveConfig.mutate({ ...cfg, custom_proxies: updated });
+    setProxyDialogOpen(false);
+    setEditingProxy(null);
+  };
+  const handleDeleteProxy = (name: string) => {
+    if (!cfg) return;
+    saveConfig.mutate({ ...cfg, custom_proxies: cfg.custom_proxies.filter((p) => p.name !== name) });
+  };
+
+  const handleRuleSubmit = (rs: ClashCustomRule) => {
+    if (!cfg) return;
+    const existing = cfg.custom_rules ?? [];
+    const updated = editingRule
+      ? existing.map((x) => (x.id === editingRule.id ? rs : x))
+      : [...existing, rs];
+    saveConfig.mutate({ ...cfg, custom_rules: updated });
+    setRuleDialogOpen(false);
+    setEditingRule(null);
+  };
+  const handleDeleteRule = (id: string) => {
+    if (!cfg) return;
+    saveConfig.mutate({ ...cfg, custom_rules: cfg.custom_rules.filter((r) => r.id !== id) });
+  };
+  const handleMoveRule = (index: number, dir: -1 | 1) => {
+    if (!cfg) return;
+    const list = [...cfg.custom_rules];
+    const target = index + dir;
+    if (target < 0 || target >= list.length) return;
+    const tmp = list[index]!;
+    list[index] = list[target]!;
+    list[target] = tmp;
+    saveConfig.mutate({ ...cfg, custom_rules: list });
+  };
+  const handleToggleRule = (id: string) => {
+    if (!cfg) return;
+    const list = cfg.custom_rules.map((r) =>
+      r.id === id ? { ...r, enabled: !r.enabled } : r,
+    );
+    saveConfig.mutate({ ...cfg, custom_rules: list });
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{initial ? 'Edit Group' : 'New Group'}</DialogTitle>
-        </DialogHeader>
-        <form className="space-y-4" onSubmit={handleSubmit}>
-          <div className="space-y-1.5">
-            <Label>Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="PROXY" required />
+    <div className="space-y-4">
+      <SubscribeCard
+        subscribeUrl={subscribeUrl}
+        hasKey={!!cfg?.api_key}
+        onRotate={() => rotateKey.mutate()}
+        rotating={rotateKey.isPending}
+        baseUrl={cfg?.public_base_url ?? ''}
+        onSaveBaseUrl={(b) => saveBaseUrl.mutate(b)}
+        savingBaseUrl={saveBaseUrl.isPending}
+      />
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>YAML 模板 (clash 订阅基础配置)</CardTitle>
+          <div className="flex gap-2">
+            {draft !== null && (
+              <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>取消</Button>
+            )}
+            <Button
+              size="sm"
+              disabled={saveTemplate.isPending || draft === null}
+              onClick={() => saveTemplate.mutate(content)}
+            >
+              {saveTemplate.isPending ? '保存中…' : '保存'}
+            </Button>
           </div>
-          <div className="space-y-1.5">
-            <Label>Type</Label>
-            <div className="flex flex-wrap gap-1.5">
-              {GROUP_TYPES.map((t) => (
-                <button key={t} type="button" onClick={() => setType(t)}
-                  className={cn('rounded-md border px-3 py-1.5 text-xs font-medium transition-all',
-                    type === t ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground')}>
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Keywords (comma-separated)</Label>
-            <Input value={keywordsText} onChange={(e) => setKeywordsText(e.target.value)} placeholder="HK, 香港, US" />
-            <p className="text-xs text-muted-foreground">Proxies whose names contain any keyword will be included.</p>
-          </div>
-          {(upstreamGroupNames.length > 0 || customGroupNames.length > 0) ? (
-            <div className="space-y-1.5">
-              <Label className="flex items-center gap-1.5">
-                Inject Into <InfoIcon title="选择此分组需要注入的 select 代理组（上游或自定义均可）。" />
-              </Label>
-              <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/20 p-2 space-y-2">
-                {customGroupNames.length > 0 ? (
-                  <div>
-                    <p className="mb-1 text-[10px] text-muted-foreground">自定义分组</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {customGroupNames.map((n) => (
-                        <button key={n} type="button" onClick={() => toggleInjectInto(n)}
-                          className={cn('rounded border px-2 py-0.5 text-xs transition-all',
-                            injectInto.includes(n) ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground')}>
-                          {n}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {upstreamGroupNames.length > 0 ? (
-                  <div>
-                    <p className="mb-1 text-[10px] text-muted-foreground">上游分组</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {upstreamGroupNames.map((n) => (
-                        <button key={n} type="button" onClick={() => toggleInjectInto(n)}
-                          className={cn('rounded border px-2 py-0.5 text-xs transition-all',
-                            injectInto.includes(n) ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground')}>
-                          {n}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
+        </CardHeader>
+        <CardContent>
+          <textarea
+            className="h-[480px] w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed outline-none focus:border-primary"
+            value={content}
+            onChange={(e) => setDraft(e.target.value)}
+            spellCheck={false}
+            placeholder="# 粘贴 Clash YAML（包含 proxy-providers / proxy-groups / rule-providers / rules）..."
+          />
+          <p className="mt-2 text-xs text-muted-foreground">
+            保存后会自动解析 rule-providers / proxy-providers 中的远程 URL 以及 proxy-groups 的 icon 图片，下载到本地并在订阅中替换为本服务的 /api/clash/static/ 链接。
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>自定义节点</span>
+            <Button size="sm" onClick={() => { setEditingProxy(null); setProxyDialogOpen(true); }}>+ 新增节点</Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {(cfg?.custom_proxies ?? []).length === 0 ? (
+            <div className="text-sm text-muted-foreground">暂无自定义节点。</div>
+          ) : (cfg?.custom_proxies ?? []).map((p) => (
+            <div key={p.name} className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="font-medium">{p.name}</span>
+                {p.type ? <Badge variant="secondary" className="text-xs">{String(p.type)}</Badge> : null}
+                {p.server && p.port ? <span className="font-mono text-xs text-muted-foreground">{String(p.server)}:{String(p.port)}</span> : null}
               </div>
-              {injectInto.length > 0 ? (
-                <p className="text-xs text-muted-foreground">已选: {injectInto.join(', ')}</p>
-              ) : (
-                <p className="text-xs text-muted-foreground">未选择 — 此分组不会注入任何 select 组</p>
-              )}
-            </div>
-          ) : null}
-          {hasHealthCheck ? (
-            <>
-              <div className="space-y-1.5">
-                <Label className="flex items-center gap-1.5">
-                  Test URL <InfoIcon title="Health check URL used to test proxy latency/availability." />
-                </Label>
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={DEFAULT_TEST_URL} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="flex items-center gap-1.5">
-                    Interval (s) <InfoIcon title="How often to run the health check. Default: 300s." />
-                  </Label>
-                  <Input inputMode="numeric" value={interval} onChange={(e) => { const v = e.target.value.replace(/\D/g, ''); setInterval(v ? Number(v) : 0); }} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="flex items-center gap-1.5">
-                    Timeout (ms) <InfoIcon title="Max wait time for each health check request. Default: 5000ms." />
-                  </Label>
-                  <Input inputMode="numeric" value={timeout} onChange={(e) => { const v = e.target.value.replace(/\D/g, ''); setTimeout(v ? Number(v) : 0); }} />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="flex items-center gap-1.5">
-                    Max failed times <InfoIcon title="Number of consecutive failures before a proxy is removed. Default: 5." />
-                  </Label>
-                  <Input inputMode="numeric" value={maxFailedTimes} onChange={(e) => { const v = e.target.value.replace(/\D/g, ''); setMaxFailedTimes(v ? Number(v) : 0); }} />
-                </div>
-                {type === 'url-test' ? (
-                  <div className="space-y-1.5">
-                    <Label className="flex items-center gap-1.5">
-                      Tolerance (ms) <InfoIcon title="Only switch proxy when latency difference exceeds this value. Default: 150ms." />
-                    </Label>
-                    <Input inputMode="numeric" value={tolerance} onChange={(e) => { const v = e.target.value.replace(/\D/g, ''); setTolerance(v ? Number(v) : 0); }} />
-                  </div>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <input id="lazy-check" type="checkbox" checked={lazy} onChange={(e) => setLazy(e.target.checked)} className="h-4 w-4" />
-                <label htmlFor="lazy-check" className="flex items-center gap-1.5 text-sm">
-                  Lazy <InfoIcon title="Only run health checks when a request is being made, not on a fixed interval." />
-                </label>
-              </div>
-            </>
-          ) : null}
-          {type === 'load-balance' ? (
-            <div className="space-y-1.5">
-              <Label className="flex items-center gap-1.5">
-                Strategy <InfoIcon title="round-robin: rotate proxies in order. consistent-hashing: same host uses same proxy. sticky-sessions: same client IP uses same proxy." />
-              </Label>
-              <div className="flex flex-wrap gap-1.5">
-                {LOAD_BALANCE_STRATEGIES.map((s) => (
-                  <button key={s} type="button" onClick={() => setStrategy(s)}
-                    className={cn('rounded-md border px-3 py-1.5 text-xs font-medium transition-all',
-                      strategy === s ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground')}>
-                    {s}
-                  </button>
-                ))}
+              <div className="flex gap-1.5">
+                <Button size="sm" variant="outline" onClick={() => { setEditingProxy(p); setProxyDialogOpen(true); }}>编辑</Button>
+                <Button size="sm" variant="destructive" onClick={() => { if (window.confirm(`删除节点 "${p.name}"?`)) handleDeleteProxy(p.name); }}>删除</Button>
               </div>
             </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>自定义规则 (置顶注入)</span>
+            <Button size="sm" disabled={groupNames.length === 0} onClick={() => { setEditingRule(null); setRuleDialogOpen(true); }}>
+              + 新增规则
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {groupNames.length === 0 ? (
+            <div className="text-xs text-muted-foreground">请先保存包含 proxy-groups 的 YAML 模板，才能添加规则。</div>
           ) : null}
-          <DialogFooter className="gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit">Save</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+          {(cfg?.custom_rules ?? []).length === 0 ? (
+            <div className="text-sm text-muted-foreground">暂无自定义规则。</div>
+          ) : (cfg?.custom_rules ?? []).map((r, idx) => (
+            <div key={r.id} className={cn('flex items-center justify-between gap-3 rounded-md border border-border p-3', !r.enabled && 'opacity-50')}>
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="font-medium">{r.name}</span>
+                <Badge variant="secondary" className="text-xs">{r.behavior}</Badge>
+                <span className="text-xs text-muted-foreground">→ {r.target_group}</span>
+                <span className="text-xs text-muted-foreground">({r.rules.length} 条)</span>
+                <span className="font-mono text-[10px] text-muted-foreground">custom-{r.id}.list</span>
+              </div>
+              <div className="flex gap-1.5">
+                <Button size="sm" variant="ghost" disabled={idx === 0} onClick={() => handleMoveRule(idx, -1)}>↑</Button>
+                <Button size="sm" variant="ghost" disabled={idx === (cfg?.custom_rules.length ?? 0) - 1} onClick={() => handleMoveRule(idx, 1)}>↓</Button>
+                <Button size="sm" variant="outline" onClick={() => handleToggleRule(r.id)}>{r.enabled ? '停用' : '启用'}</Button>
+                <Button size="sm" variant="outline" onClick={() => { setEditingRule(r); setRuleDialogOpen(true); }}>编辑</Button>
+                <Button size="sm" variant="destructive" onClick={() => { if (window.confirm(`删除规则 "${r.name}"?`)) handleDeleteRule(r.id); }}>删除</Button>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">远程资源</h2>
+        <Button variant="outline" size="sm" disabled={anyRefreshing} onClick={() => refreshAll()}>
+          {anyRefreshing ? `刷新中… (${refreshing.size})` : '全量刷新'}
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {RESOURCE_GROUPS.map((g) => (
+          <ResourceGroup
+            key={g}
+            group={g}
+            entries={manifestQuery.data?.[g] ?? []}
+            refreshing={refreshing}
+            anyRefreshing={anyRefreshing}
+            onRefreshGroup={() => refreshAll(g)}
+            onRefreshOne={(url) => refreshOne(g, url)}
+            onAdd={(url) => addResource.mutate({ group: g, url })}
+            onRemove={(filename) => removeResource.mutate({ group: g, filename })}
+            adding={addResource.isPending}
+            removing={removeResource.isPending}
+          />
+        ))}
+      </div>
+
+      <ProxyDialog
+        open={proxyDialogOpen}
+        onOpenChange={setProxyDialogOpen}
+        initial={editingProxy}
+        onSubmit={handleProxySubmit}
+      />
+      <RuleDialog
+        open={ruleDialogOpen}
+        onOpenChange={setRuleDialogOpen}
+        initial={editingRule}
+        groupNames={groupNames}
+        onSubmit={handleRuleSubmit}
+      />
+    </div>
   );
 }
 
-interface RuleSetDialogProps {
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-  initial?: ClashRuleSet | null;
-  groupNames: string[];
-  upstreamGroupNames: string[];
-  onSubmit: (rs: ClashRuleSet) => void;
+function SubscribeCard({
+  subscribeUrl,
+  hasKey,
+  onRotate,
+  rotating,
+  baseUrl,
+  onSaveBaseUrl,
+  savingBaseUrl,
+}: {
+  subscribeUrl: string;
+  hasKey: boolean;
+  onRotate: () => void;
+  rotating: boolean;
+  baseUrl: string;
+  onSaveBaseUrl: (b: string) => void;
+  savingBaseUrl: boolean;
+}) {
+  const toast = useToast();
+  const [baseDraft, setBaseDraft] = useState<string | null>(null);
+  const baseValue = baseDraft ?? baseUrl;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>订阅地址</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Input value={subscribeUrl} readOnly className="font-mono text-xs" />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                navigator.clipboard.writeText(subscribeUrl).then(
+                  () => toast.success('已复制'),
+                  () => toast.error('复制失败'),
+                );
+              }}
+            >
+              复制
+            </Button>
+            <Button size="sm" variant="outline" onClick={onRotate} disabled={rotating}>
+              {hasKey ? '轮换密钥' : '生成密钥'}
+            </Button>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="shrink-0 text-xs text-muted-foreground">公网地址</Label>
+          <Input
+            value={baseValue}
+            onChange={(e) => setBaseDraft(e.target.value)}
+            placeholder="http://127.0.0.1:3333 (留空使用此默认)"
+            className="font-mono text-xs"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={savingBaseUrl || baseDraft === null}
+            onClick={() => {
+              onSaveBaseUrl(baseValue.trim());
+              setBaseDraft(null);
+            }}
+          >
+            保存
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          订阅地址为本服务访问入口；公网地址用于订阅文件内 /api/clash/static/ 资源 URL 的替换（不填默认 http://127.0.0.1:3333）。
+        </p>
+      </CardContent>
+    </Card>
+  );
 }
 
-function RuleSetDialog({ open, onOpenChange, initial, groupNames, upstreamGroupNames, onSubmit }: RuleSetDialogProps) {
+function LocalLink({ group, filename, downloaded }: { group: ClashResourceGroup; filename: string; downloaded: boolean }) {
+  const toast = useToast();
+  const localPath = `/api/clash/static/${group}/${encodeURIComponent(filename)}`;
+  const fullUrl = typeof window !== 'undefined' ? `${window.location.origin}${localPath}` : localPath;
+  if (!downloaded) {
+    return <div className="text-[10px] text-muted-foreground/70">本地: 未下载</div>;
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <a href={localPath} target="_blank" rel="noreferrer" className="truncate text-[11px] text-foreground hover:underline" title={fullUrl}>
+        本地: {fullUrl}
+      </a>
+      <button
+        type="button"
+        className="text-[10px] text-muted-foreground hover:text-foreground"
+        onClick={(ev) => {
+          ev.preventDefault();
+          navigator.clipboard.writeText(fullUrl).then(
+            () => toast.success('已复制本地地址'),
+            () => toast.error('复制失败'),
+          );
+        }}
+      >
+        [复制]
+      </button>
+    </div>
+  );
+}
+
+function ResourceGroup({
+  group,
+  entries,
+  refreshing,
+  anyRefreshing,
+  onRefreshGroup,
+  onRefreshOne,
+  onAdd,
+  onRemove,
+  adding,
+  removing,
+}: {
+  group: ClashResourceGroup;
+  entries: ClashResource[];
+  refreshing: Set<string>;
+  anyRefreshing: boolean;
+  onRefreshGroup: () => void;
+  onRefreshOne: (url: string) => void;
+  onAdd: (url: string) => void;
+  onRemove: (filename: string) => void;
+  adding: boolean;
+  removing: boolean;
+}) {
+  const [newUrl, setNewUrl] = useState('');
+  const remoteCount = entries.filter((e) => e.source === 'remote').length;
+  const manualCount = entries.filter((e) => e.source === 'manual').length;
+  const localCount = entries.filter((e) => e.source === 'local').length;
+  const groupRefreshing = entries.some((e) => refreshing.has(`${group}:${e.url}`));
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <div>
+          <CardTitle className="text-base">{GROUP_LABELS[group]}</CardTitle>
+          <div className="mt-1 flex gap-2 text-xs text-muted-foreground">
+            <Badge variant="outline">remote {remoteCount}</Badge>
+            <Badge variant="outline">manual {manualCount}</Badge>
+            {localCount > 0 ? <Badge variant="outline">local {localCount}</Badge> : null}
+          </div>
+        </div>
+        <Button size="sm" variant="outline" disabled={anyRefreshing} onClick={onRefreshGroup}>
+          {groupRefreshing ? '刷新中…' : '刷新本组'}
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex gap-2">
+          <Input
+            placeholder="新增资源 URL (https://...)"
+            value={newUrl}
+            onChange={(e) => setNewUrl(e.target.value)}
+            className="text-xs"
+          />
+          <Button
+            size="sm"
+            disabled={adding || !newUrl.trim()}
+            onClick={() => {
+              onAdd(newUrl.trim());
+              setNewUrl('');
+            }}
+          >
+            新增
+          </Button>
+        </div>
+        {entries.length === 0 ? (
+          <p className="py-6 text-center text-xs text-muted-foreground">暂无资源</p>
+        ) : (
+          <div className="max-h-72 space-y-1.5 overflow-y-auto">
+            {entries.map((e) => {
+              const isRefreshing = refreshing.has(`${group}:${e.url}`);
+              return (
+                <div
+                  key={e.filename}
+                  className={cn(
+                    'flex items-start justify-between gap-2 rounded-md border border-border bg-background/40 p-2 text-xs',
+                    e.error && 'border-destructive/60',
+                  )}
+                >
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant={e.source === 'manual' ? 'default' : 'outline'} className="shrink-0 px-1 py-0 text-[10px]">{e.source}</Badge>
+                      <span className="min-w-0 flex-1 truncate font-mono">{e.filename}</span>
+                    </div>
+                    <div className="truncate text-muted-foreground" title={e.url}>源: {e.url}</div>
+                    <LocalLink group={group} filename={e.filename} downloaded={e.source === 'local' || !!e.updatedAt} />
+                    <div className="text-[10px] text-muted-foreground/80">
+                      {fmtBytes(e.size)} · {fmtTime(e.updatedAt)}
+                      {e.error && <span className="ml-2 text-destructive">{e.error}</span>}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-1">
+                    {e.source !== 'local' ? (
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" disabled={isRefreshing} onClick={() => onRefreshOne(e.url)}>
+                        {isRefreshing ? '刷新中' : '刷新'}
+                      </Button>
+                    ) : null}
+                    {e.source !== 'local' ? (
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-destructive" disabled={removing || isRefreshing} onClick={() => onRemove(e.filename)}>
+                        删除
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const RULE_TYPES = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'PROCESS-NAME'] as const;
+const BEHAVIORS: RuleBehavior[] = ['classical', 'domain', 'ipcidr'];
+
+function RuleDialog({
+  open,
+  onOpenChange,
+  initial,
+  groupNames,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  initial?: ClashCustomRule | null;
+  groupNames: string[];
+  onSubmit: (r: ClashCustomRule) => void;
+}) {
   const [name, setName] = useState('');
-  const [group, setGroup] = useState('');
+  const [behavior, setBehavior] = useState<RuleBehavior>('classical');
+  const [targetGroup, setTargetGroup] = useState('');
   const [rulesText, setRulesText] = useState('');
   const [showTypePicker, setShowTypePicker] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -305,11 +651,12 @@ function RuleSetDialog({ open, onOpenChange, initial, groupNames, upstreamGroupN
   useEffect(() => {
     if (open) {
       setName(initial?.name ?? '');
-      setGroup(initial?.group ?? (groupNames[0] ?? upstreamGroupNames[0] ?? ''));
+      setBehavior(initial?.behavior ?? 'classical');
+      setTargetGroup(initial?.target_group ?? groupNames[0] ?? '');
       setRulesText((initial?.rules ?? []).join('\n'));
       setShowTypePicker(false);
     }
-  }, [open, initial, groupNames, upstreamGroupNames]);
+  }, [open, initial, groupNames]);
 
   const insertType = (t: string) => {
     const ta = textareaRef.current;
@@ -325,58 +672,59 @@ function RuleSetDialog({ open, onOpenChange, initial, groupNames, upstreamGroupN
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter') {
-      setShowTypePicker(true);
-    } else {
-      setShowTypePicker(false);
-    }
+    if (e.key === 'Enter') setShowTypePicker(true);
+    else setShowTypePicker(false);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const rules = rulesText
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean);
-    onSubmit({ name, group, rules });
+    const rules = rulesText.split('\n').map((l) => l.trim()).filter(Boolean);
+    onSubmit({
+      id: initial?.id ?? randomId(),
+      name,
+      behavior,
+      target_group: targetGroup,
+      rules,
+      enabled: initial?.enabled ?? true,
+    });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{initial ? 'Edit Rule Set' : 'New Rule Set'}</DialogTitle>
+          <DialogTitle>{initial ? '编辑规则' : '新增规则'}</DialogTitle>
         </DialogHeader>
         <form className="space-y-4" onSubmit={handleSubmit}>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Name</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="GFW" required />
+              <Label>名称</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="MyRules" required />
             </div>
             <div className="space-y-1.5">
-              <Label>Target Group</Label>
+              <Label>目标分组</Label>
               <select
-                value={group}
-                onChange={(e) => setGroup(e.target.value)}
+                value={targetGroup}
+                onChange={(e) => setTargetGroup(e.target.value)}
                 required
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
               >
-                {groupNames.length > 0 ? (
-                  <optgroup label="自定义分组">
-                    {groupNames.map((n) => <option key={n} value={n}>{n}</option>)}
-                  </optgroup>
-                ) : null}
-                {upstreamGroupNames.length > 0 ? (
-                  <optgroup label="原分组">
-                    {upstreamGroupNames.map((n) => <option key={n} value={n}>{n}</option>)}
-                  </optgroup>
-                ) : null}
+                {groupNames.map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
             </div>
           </div>
-
           <div className="space-y-1.5">
-            <Label>Rules (one per line, e.g. DOMAIN-SUFFIX,google.com)</Label>
+            <Label>Behavior</Label>
+            <select
+              value={behavior}
+              onChange={(e) => setBehavior(e.target.value as RuleBehavior)}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {BEHAVIORS.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>规则 (每行一条，例如 DOMAIN-SUFFIX,google.com)</Label>
             <textarea
               ref={textareaRef}
               value={rulesText}
@@ -390,7 +738,7 @@ function RuleSetDialog({ open, onOpenChange, initial, groupNames, upstreamGroupN
             {showTypePicker ? (
               <div className="flex flex-wrap gap-1.5 rounded-md border border-primary/30 bg-card p-2">
                 <span className="w-full text-[10px] text-muted-foreground">Insert type:</span>
-                {(['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'PROCESS-NAME'] as const).map((t) => (
+                {RULE_TYPES.map((t) => (
                   <button
                     key={t}
                     type="button"
@@ -402,352 +750,14 @@ function RuleSetDialog({ open, onOpenChange, initial, groupNames, upstreamGroupN
                 ))}
               </div>
             ) : null}
+            <p className="text-[10px] text-muted-foreground">保存后这些规则会作为本地 .list 文件，并以 rule-provider 形式插到订阅 rules 顶部。</p>
           </div>
-
           <DialogFooter className="gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit">Save</Button>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+            <Button type="submit">保存</Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-export function ClashTab() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  const { data: cfg } = useQuery<ClashConfig>({
-    queryKey: ['clash', 'config'],
-    queryFn: () => apiGet<ClashConfig>('/api/clash/config'),
-  });
-
-  const [subscribeUrl, setSubscribeUrl] = useState('');
-  const [refreshInterval, setRefreshInterval] = useState(60);
-  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
-  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
-  const [editingGroup, setEditingGroup] = useState<ClashGroup | null>(null);
-  const [proxyDialogOpen, setProxyDialogOpen] = useState(false);
-  const [editingProxy, setEditingProxy] = useState<ClashProxy | null>(null);
-  const [ruleSetDialogOpen, setRuleSetDialogOpen] = useState(false);
-  const [editingRuleSet, setEditingRuleSet] = useState<ClashRuleSet | null>(null);
-  const initRef = useRef(false);
-
-  useEffect(() => {
-    if (cfg && !initRef.current) {
-      initRef.current = true;
-      setSubscribeUrl(cfg.subscribe_url ?? '');
-      setRefreshInterval(cfg.refresh_interval_minutes ?? 60);
-    }
-  }, [cfg]);
-
-  const upstreamQuery = useQuery<UpstreamInfo>({
-    queryKey: ['clash', 'upstream'],
-    queryFn: () => apiGet<UpstreamInfo>('/api/clash/upstream'),
-    enabled: !!cfg?.subscribe_url,
-    retry: false,
-  });
-
-  const save = useMutation({
-    mutationFn: (body: Partial<ClashConfig>) =>
-      apiPut('/api/clash/config/save', { ...cfg, ...body }),
-    onSuccess: () => {
-      toast.success('Saved');
-      qc.invalidateQueries({ queryKey: ['clash', 'config'] });
-      qc.invalidateQueries({ queryKey: ['clash', 'upstream'] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const handleGroupSubmit = (g: ClashGroup) => {
-    const groups = cfg?.groups ?? [];
-    const updated = editingGroup
-      ? groups.map((x) => (x.name === editingGroup.name ? g : x))
-      : [...groups, g];
-    save.mutate({ groups: updated });
-    setGroupDialogOpen(false);
-    setEditingGroup(null);
-  };
-
-  const handleProxySubmit = (p: ClashProxy) => {
-    const custom_proxies = cfg?.custom_proxies ?? [];
-    const updated = editingProxy
-      ? custom_proxies.map((x) => (x.name === editingProxy.name ? p : x))
-      : [...custom_proxies, p];
-    save.mutate({ custom_proxies: updated });
-    setProxyDialogOpen(false);
-    setEditingProxy(null);
-  };
-
-  const handleDeleteProxy = (name: string) => {
-    save.mutate({ custom_proxies: (cfg?.custom_proxies ?? []).filter((p) => p.name !== name) });
-  };
-
-  const handleDeleteGroup = (name: string) => {
-    save.mutate({ groups: (cfg?.groups ?? []).filter((g) => g.name !== name) });
-  };
-
-  const handleRuleSetSubmit = (rs: ClashRuleSet) => {
-    const rule_sets = cfg?.rule_sets ?? [];
-    const updated = editingRuleSet
-      ? rule_sets.map((x) => (x.name === editingRuleSet.name ? rs : x))
-      : [...rule_sets, rs];
-    save.mutate({ rule_sets: updated });
-    setRuleSetDialogOpen(false);
-    setEditingRuleSet(null);
-  };
-
-  const handleDeleteRuleSet = (name: string) => {
-    save.mutate({ rule_sets: (cfg?.rule_sets ?? []).filter((rs) => rs.name !== name) });
-  };
-
-  const handleMoveRuleSet = (index: number, dir: -1 | 1) => {
-    const list = [...(cfg?.rule_sets ?? [])];
-    const target = index + dir;
-    if (target < 0 || target >= list.length) return;
-    const tmp = list[index]!;
-    list[index] = list[target]!;
-    list[target] = tmp;
-    save.mutate({ rule_sets: list });
-  };
-
-  const handleToggleRuleSet = (name: string) => {
-    const list = (cfg?.rule_sets ?? []).map((rs) =>
-      rs.name === name ? { ...rs, enabled: rs.enabled === false } : rs,
-    );
-    save.mutate({ rule_sets: list });
-  };
-
-  const subscribeUrlWithKey = useMemo(
-    () => cfg?.api_key ? `${window.location.origin}/api/clash/subscribe?api-key=${cfg.api_key}` : null,
-    [cfg?.api_key],
-  );
-
-  const rotateKey = useMutation({
-    mutationFn: () => api('/api/clash/subscribe/rotate-key', { method: 'POST' }),
-    onSuccess: () => {
-      toast.success('订阅密钥已更新');
-      qc.invalidateQueries({ queryKey: ['clash', 'config'] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const upstreamProxies = [
-    ...(upstreamQuery.data?.proxies ?? []),
-    ...(cfg?.custom_proxies ?? []).map((p) => p.name),
-  ];
-  const groupNames = (cfg?.groups ?? []).map((g) => g.name);
-
-  return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Clash Subscription &amp; Upstream</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>Upstream Subscription URL</Label>
-            <Input
-              value={subscribeUrl}
-              onChange={(e) => setSubscribeUrl(e.target.value)}
-              onBlur={() => save.mutate({ subscribe_url: subscribeUrl })}
-              placeholder="https://..."
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Auto-refresh interval (minutes)</Label>
-            <Input
-              type="number" min={1} className="w-40"
-              value={refreshInterval}
-              onChange={(e) => setRefreshInterval(Number(e.target.value))}
-              onBlur={() => save.mutate({ refresh_interval_minutes: refreshInterval })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">Subscribe URL with API Key</Label>
-              <Button size="sm" variant="outline" onClick={() => rotateKey.mutate()} disabled={rotateKey.isPending}>
-                {rotateKey.isPending ? 'Generating...' : cfg?.api_key ? 'Rotate Key' : 'Generate Key'}
-              </Button>
-            </div>
-            {subscribeUrlWithKey ? (
-              <div className="flex items-center gap-2">
-                <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs">{subscribeUrlWithKey}</code>
-                <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(subscribeUrlWithKey); toast.success('已复制'); }}>
-                  Copy
-                </Button>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">点击「Generate Key」生成带鉴权的订阅地址，之前的 key 将失效。</p>
-            )}
-          </div>
-          {upstreamQuery.data ? (
-            <div className="space-y-1 text-xs text-muted-foreground">
-              <div>Upstream nodes: <span className="text-foreground">{upstreamQuery.data.proxies?.length ?? 0}</span></div>
-              <div>Upstream groups: <span className="text-foreground">{upstreamQuery.data.groups?.length ?? 0}</span></div>
-              {upstreamQuery.data.fetchedAt ? (
-                <div>Last refreshed: <span className="text-foreground">{new Date(upstreamQuery.data.fetchedAt).toLocaleString()}</span></div>
-              ) : null}
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Custom Proxies</span>
-            <Button size="sm" onClick={() => { setEditingProxy(null); setProxyDialogOpen(true); }}>
-              + Add Proxy
-            </Button>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {(cfg?.custom_proxies ?? []).length === 0 ? (
-            <div className="text-sm text-muted-foreground">No custom proxies. Click "+ Add Proxy" to add one.</div>
-          ) : (cfg?.custom_proxies ?? []).map((p) => (
-            <div key={p.name} className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
-              <div className="flex flex-wrap items-center gap-2 min-w-0">
-                <span className="font-medium">{p.name}</span>
-                {p.type ? <Badge variant="secondary" className="text-xs">{String(p.type)}</Badge> : null}
-                {p.server && p.port ? <span className="font-mono text-xs text-muted-foreground">{String(p.server)}:{String(p.port)}</span> : null}
-                {p.network ? <Badge variant="outline" className="text-xs">{String(p.network)}</Badge> : null}
-                {p.tls ? <Badge variant="outline" className="text-xs text-green-600 dark:text-green-400">TLS</Badge> : null}
-              </div>
-              <div className="flex gap-1.5">
-                <Button size="sm" variant="outline" onClick={() => { setEditingProxy(p); setProxyDialogOpen(true); }}>Edit</Button>
-                <Button size="sm" variant="destructive" onClick={() => { if (window.confirm(`Delete proxy "${p.name}"?`)) handleDeleteProxy(p.name); }}>Delete</Button>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Groups</span>
-            <Button size="sm" onClick={() => { setEditingGroup(null); setGroupDialogOpen(true); }}>
-              + New Group
-            </Button>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {(cfg?.groups ?? []).length === 0 ? (
-            <div className="text-sm text-muted-foreground">No groups. Click "+ New Group" to add one.</div>
-          ) : (cfg?.groups ?? []).map((g) => {
-            const nodes = matchedProxies(g, upstreamProxies);
-            const isExpanded = expandedGroup === g.name;
-            return (
-              <div key={g.name} className="rounded-md border border-border">
-                <div className="flex cursor-pointer flex-wrap items-center justify-between gap-3 p-3"
-                  onClick={() => setExpandedGroup(isExpanded ? null : g.name)}>
-                  <div className="flex flex-col gap-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{g.name}</span>
-                      <Badge variant="secondary" className="text-xs">{g.type}</Badge>
-                      {(g.keywords ?? []).map((kw) => (
-                        <Badge key={kw} variant="outline" className="text-xs">{kw}</Badge>
-                      ))}
-                      {g.strategy ? <Badge variant="outline" className="text-xs text-muted-foreground">{g.strategy}</Badge> : null}
-                      <span className="text-xs text-muted-foreground">{nodes.length} nodes</span>
-                    </div>
-                    {(g.inject_into && g.inject_into.length > 0) ? (
-                      <div className="text-xs text-muted-foreground">
-                        inject → <span className="text-foreground/70">{g.inject_into.join(', ')}</span>
-                      </div>
-                    ) : null}
-                    {(g.interval !== undefined || g.timeout !== undefined || g.tolerance !== undefined || g.lazy !== undefined || g.max_failed_times !== undefined) ? (
-                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                        {g.interval !== undefined ? <span>interval: <code className="text-foreground/70">{g.interval}s</code></span> : null}
-                        {g.timeout !== undefined ? <span>timeout: <code className="text-foreground/70">{g.timeout}ms</code></span> : null}
-                        {g.tolerance !== undefined ? <span>tolerance: <code className="text-foreground/70">{g.tolerance}ms</code></span> : null}
-                        {g.lazy !== undefined ? <span>lazy: <code className="text-foreground/70">{String(g.lazy)}</code></span> : null}
-                        {g.max_failed_times !== undefined ? <span>max-failed-times: <code className="text-foreground/70">{g.max_failed_times}</code></span> : null}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
-                    <Button size="sm" variant="outline" onClick={() => { setEditingGroup(g); setGroupDialogOpen(true); }}>Edit</Button>
-                    <Button size="sm" variant="destructive" onClick={() => { if (window.confirm(`Delete group "${g.name}"?`)) handleDeleteGroup(g.name); }}>Delete</Button>
-                  </div>
-                </div>
-                {isExpanded ? (
-                  <div className="border-t border-border px-3 py-2">
-                    {nodes.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {nodes.map((n) => <span key={n} className="rounded bg-muted px-2 py-0.5 font-mono text-xs">{n}</span>)}
-                      </div>
-                    ) : <span className="text-xs text-muted-foreground">No matching nodes</span>}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Rule Sets</span>
-            <Button size="sm" onClick={() => { setEditingRuleSet(null); setRuleSetDialogOpen(true); }}>
-              + New Rule Set
-            </Button>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {(cfg?.rule_sets ?? []).length === 0 ? (
-            <div className="text-sm text-muted-foreground">No rule sets. Click "+ New Rule Set" to add one.</div>
-          ) : (cfg?.rule_sets ?? []).map((rs, idx, arr) => {
-            const isEnabled = rs.enabled !== false;
-            return (
-              <div key={rs.name} className={cn('flex cursor-pointer flex-wrap items-center justify-between gap-3 rounded-md border p-3 transition-colors',
-                isEnabled ? 'border-border' : 'border-border/50 bg-muted/20 opacity-60')}
-                onClick={() => { setEditingRuleSet(rs); setRuleSetDialogOpen(true); }}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={cn('font-medium', !isEnabled && 'line-through text-muted-foreground')}>{rs.name}</span>
-                  <Badge variant="secondary" className="text-xs">→ {rs.group}</Badge>
-                  <span className="text-xs text-muted-foreground">{rs.rules.length} rules</span>
-                  {!isEnabled ? <Badge variant="outline" className="text-xs text-muted-foreground">disabled</Badge> : null}
-                </div>
-                <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
-                  <Button size="sm" variant="outline" disabled={idx === 0} onClick={() => handleMoveRuleSet(idx, -1)}>↑</Button>
-                  <Button size="sm" variant="outline" disabled={idx === arr.length - 1} onClick={() => handleMoveRuleSet(idx, 1)}>↓</Button>
-                  <Button size="sm" variant={isEnabled ? 'outline' : 'secondary'} onClick={() => handleToggleRuleSet(rs.name)}>
-                    {isEnabled ? 'Disable' : 'Enable'}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => { setEditingRuleSet(rs); setRuleSetDialogOpen(true); }}>Edit</Button>
-                  <Button size="sm" variant="destructive" onClick={() => { if (window.confirm(`Delete rule set "${rs.name}"?`)) handleDeleteRuleSet(rs.name); }}>Delete</Button>
-                </div>
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
-
-      <GroupDialog
-        open={groupDialogOpen}
-        onOpenChange={(o) => { setGroupDialogOpen(o); if (!o) setEditingGroup(null); }}
-        initial={editingGroup}
-        upstreamGroupNames={upstreamQuery.data?.groups ?? []}
-        customGroupNames={(cfg?.groups ?? []).map((g) => g.name).filter((n) => n !== editingGroup?.name)}
-        onSubmit={handleGroupSubmit}
-      />
-      <RuleSetDialog
-        open={ruleSetDialogOpen}
-        onOpenChange={(o) => { setRuleSetDialogOpen(o); if (!o) setEditingRuleSet(null); }}
-        initial={editingRuleSet}
-        groupNames={groupNames}
-        upstreamGroupNames={upstreamQuery.data?.groups ?? []}
-        onSubmit={handleRuleSetSubmit}
-      />
-      <ProxyDialog
-        open={proxyDialogOpen}
-        onOpenChange={(o) => { setProxyDialogOpen(o); if (!o) setEditingProxy(null); }}
-        initial={editingProxy}
-        onSubmit={handleProxySubmit}
-      />
-    </div>
   );
 }

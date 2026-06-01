@@ -52,7 +52,7 @@ interface OAuthLoginState {
 }
 
 export interface CopilotAccountsServiceOptions {
-  /** Override for `copilot-api auth --show-token` spawner — used by tests. */
+  /** Override for `copilot-api auth --provider=copilot --show-token` spawner — used by tests. */
   spawnAuth?: (logFilePath: string) => ChildProcess;
   /** Override for clipboard copy. Default uses `pbcopy`. */
   copyToClipboard?: (code: string) => Promise<void>;
@@ -376,7 +376,7 @@ export class CopilotAccountsService {
       logStream = fs.createWriteStream(this.copilotLogPath(), { flags: 'a' });
       child = this.options.spawnAuth
         ? this.options.spawnAuth(this.copilotLogPath())
-        : spawn('copilot-api', ['auth', '--show-token'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        : spawn('copilot-api', ['auth', '--provider=copilot', '--show-token'], { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
       this.failOAuth(loginId, `failed to prepare copilot auth: ${(err as Error).message}`);
       return;

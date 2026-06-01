@@ -1,49 +1,67 @@
 import { z } from 'zod';
 
+export const CLASH_GROUPS = ['list', 'icon'] as const;
+export type ClashResourceGroup = (typeof CLASH_GROUPS)[number];
+
+export const ClashResourceGroupSchema = z.enum(CLASH_GROUPS);
+
 export const ClashProxySchema = z.object({
   name: z.string().min(1),
 }).passthrough();
 export type ClashProxy = z.infer<typeof ClashProxySchema>;
 
-export const ClashGroupSchema = z.object({
-  name: z.string().min(1),
-  type: z.string().min(1),
-  proxies: z.array(z.string()).default([]),
-  keywords: z.array(z.string()).default([]),
-  inject_into: z.array(z.string()).default([]),
-  url: z.string().optional(),
-  interval: z.number().int().min(1).optional(),
-  timeout: z.number().int().min(1).optional(),
-  tolerance: z.number().int().min(0).optional(),
-  lazy: z.boolean().optional(),
-  max_failed_times: z.number().int().min(0).optional(),
-  strategy: z.string().optional(),
-});
-export type ClashGroup = z.infer<typeof ClashGroupSchema>;
+export const ClashRuleBehaviorSchema = z.enum(['classical', 'domain', 'ipcidr']);
+export type ClashRuleBehavior = z.infer<typeof ClashRuleBehaviorSchema>;
 
-export const ClashRuleSetSchema = z.object({
+export const ClashCustomRuleSchema = z.object({
+  id: z.string().min(1),
   name: z.string().min(1),
-  group: z.string().min(1),
+  target_group: z.string().min(1),
+  behavior: ClashRuleBehaviorSchema.default('classical'),
   rules: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
 });
-export type ClashRuleSet = z.infer<typeof ClashRuleSetSchema>;
+export type ClashCustomRule = z.infer<typeof ClashCustomRuleSchema>;
 
 export const ClashConfigSchema = z.object({
-  subscribe_url: z.string().default(''),
-  refresh_interval_minutes: z.number().int().min(1).default(60),
   api_key: z.string().optional(),
+  public_base_url: z.string().optional(),
   custom_proxies: z.array(ClashProxySchema).default([]),
-  groups: z.array(ClashGroupSchema).default([]),
-  rule_sets: z.array(ClashRuleSetSchema).default([]),
+  custom_rules: z.array(ClashCustomRuleSchema).default([]),
 });
 export type ClashConfig = z.infer<typeof ClashConfigSchema>;
 
-export interface ClashUpstreamInfo {
-  proxies: string[];
-  groups: string[];
-  fetchedAt?: number;
+export const ClashResourceSchema = z.object({
+  url: z.string().url(),
+  filename: z.string().min(1),
+  source: z.enum(['remote', 'manual', 'local']),
+  size: z.number().int().min(0).optional(),
+  updatedAt: z.number().int().optional(),
+  error: z.string().optional(),
+});
+export type ClashResource = z.infer<typeof ClashResourceSchema>;
+
+export type ClashManifest = Record<ClashResourceGroup, ClashResource[]>;
+
+export function emptyManifest(): ClashManifest {
+  return { list: [], icon: [] };
 }
+
+export const RefreshBodySchema = z.object({
+  group: ClashResourceGroupSchema.optional(),
+  url: z.string().url().optional(),
+});
+export type RefreshBody = z.infer<typeof RefreshBodySchema>;
+
+export const AddBodySchema = z.object({
+  group: ClashResourceGroupSchema,
+  url: z.string().url(),
+});
+
+export const DeleteBodySchema = z.object({
+  group: ClashResourceGroupSchema,
+  filename: z.string().min(1),
+});
 
 export interface ApiEnvelope<T = unknown> {
   success: boolean;
