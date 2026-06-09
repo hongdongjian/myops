@@ -166,7 +166,7 @@ export function ClaudeProviders() {
                   base: <code>{p.baseUrl || '--'}</code>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  sonnet: <code>{p.sonnetModel || p.model || '--'}</code> · opus: <code>{p.opusModel || p.model || '--'}</code> · haiku: <code>{p.haikuModel || '--'}</code>
+                  sonnet: <code>{p.sonnetModel || '--'}</code> · opus: <code>{p.opusModel || '--'}</code> · haiku: <code>{p.haikuModel || '--'}</code>
                 </div>
               </div>
               <div className="flex gap-2">

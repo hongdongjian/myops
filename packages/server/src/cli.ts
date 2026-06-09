@@ -167,8 +167,8 @@ program
       }
       for (const p of data.providers) {
         const marker = p.name === data.activeProvider ? ' *' : '';
-        const sonnet = p.sonnetModel || p.model || '-';
-        const opus = p.opusModel || p.model || '-';
+        const sonnet = p.sonnetModel || '-';
+        const opus = p.opusModel || '-';
         const haiku = p.haikuModel || '-';
         console.log(`${p.name}${marker}`);
         console.log(`  base:   ${p.baseUrl || '-'}`);
@@ -186,8 +186,8 @@ program
       process.exit(1);
     }
 
-    const sonnet = found.sonnetModel || found.model;
-    const opus = found.opusModel || found.model;
+    const sonnet = found.sonnetModel;
+    const opus = found.opusModel;
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (found.baseUrl) env.ANTHROPIC_BASE_URL = found.baseUrl;

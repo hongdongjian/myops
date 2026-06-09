@@ -106,4 +106,34 @@ describe('ClaudeProvidersService', () => {
     expect(s.providers[0].name).toBe('old');
     expect(s.activeProvider).toBe('');
   });
+
+  it('apply skips empty model mappings even when legacy model is set', async () => {
+    const { deps, home } = makeDeps();
+    const svc = new ClaudeProvidersService(deps);
+    await svc.add({
+      name: 'p1',
+      baseUrl: 'http://x',
+      token: 't',
+      model: 'legacy-model',
+      haikuModel: '',
+      sonnetModel: '',
+      opusModel: '',
+    });
+
+    await svc.apply('p1');
+
+    const settingsPath = path.join(home, '.claude', 'settings.json');
+    const written = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as { env: Record<string, string> };
+    expect(written.env.ANTHROPIC_BASE_URL).toBe('http://x');
+    expect(written.env.ANTHROPIC_AUTH_TOKEN).toBe('t');
+    expect(written.env.ANTHROPIC_MODEL).toBeUndefined();
+    expect(written.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
+    expect(written.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+    expect(written.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+
+    const store = await svc.readStore();
+    expect(store.providers[0].sonnetModel).toBe('');
+    expect(store.providers[0].opusModel).toBe('');
+    expect(store.providers[0].haikuModel).toBe('');
+  });
 });

@@ -145,8 +145,8 @@ export class ClaudeProvidersService {
     if (found.token) env.ANTHROPIC_AUTH_TOKEN = found.token;
     else delete env.ANTHROPIC_AUTH_TOKEN;
 
-    const sonnet = found.sonnetModel || found.model;
-    const opus = found.opusModel || found.model;
+    const sonnet = found.sonnetModel;
+    const opus = found.opusModel;
     const haiku = found.haikuModel;
 
     if (sonnet) {
