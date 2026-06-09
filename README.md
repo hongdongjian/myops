@@ -39,8 +39,8 @@ npm run uninstall   # 对应 install 安装
 | `myops doctor` | 输出诊断信息；macOS 下额外显示 plist 路径及服务运行状态 |
 | `myops ccenv [name]` | 列出或切换 Claude provider，用指定 provider 环境变量启动 claude CLI |
 | `myops config init <url>` | 初始化 conf 目录与 GitHub 双向同步（`--pull` 从远端克隆） |
-| `myops config upload` | 上传本地 conf 变更到 GitHub |
-| `myops config update` | 从 GitHub 拉取最新配置 |
+| `myops config push` | 上传本地 conf 变更到 GitHub |
+| `myops config pull` | 从 GitHub 拉取最新配置 |
 | `myops version` | 打印版本号 |
 
 ## 发布到 npm

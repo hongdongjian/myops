@@ -233,14 +233,14 @@ configCmd
   });
 
 configCmd
-  .command('upload')
-  .description('upload conf directory to GitHub')
+  .command('push')
+  .description('push conf directory to GitHub')
   .option('--force', 'force overwrite remote even if there are conflicts')
   .action(async (opts: { force?: boolean }) => {
     const svc = makeConfigSvc();
     try {
       await svc.upload(opts.force ?? false, (msg) => console.log(msg));
-      console.log('conf directory uploaded successfully');
+      console.log('conf directory pushed successfully');
     } catch (e) {
       console.error((e as Error).message);
       process.exit(1);
@@ -272,12 +272,12 @@ configCmd
       }
       if (info.ahead.length > 0) {
         console.log('');
-        console.log(`↑ ${info.ahead.length} commit(s) ahead of remote (run 'myops config upload' to push):`);
+        console.log(`↑ ${info.ahead.length} commit(s) ahead of remote (run 'myops config push' to push):`);
         for (const c of info.ahead) console.log(`  ${c}`);
       }
       if (info.behind.length > 0) {
         console.log('');
-        console.log(`↓ ${info.behind.length} commit(s) behind remote (run 'myops config update' to pull):`);
+        console.log(`↓ ${info.behind.length} commit(s) behind remote (run 'myops config pull' to pull):`);
         for (const c of info.behind) console.log(`  ${c}`);
       }
       if (info.ahead.length === 0 && info.behind.length === 0 && info.changes.length === 0) {
@@ -290,14 +290,14 @@ configCmd
   });
 
 configCmd
-  .command('update')
-  .description('update conf directory from GitHub')
+  .command('pull')
+  .description('pull conf directory from GitHub')
   .option('--force', 'discard all local changes before updating')
   .action(async (opts: { force?: boolean }) => {
     const svc = makeConfigSvc();
     try {
       await svc.update(opts.force ?? false, (msg) => console.log(msg));
-      console.log('conf directory updated successfully');
+      console.log('conf directory pulled successfully');
     } catch (e) {
       console.error((e as Error).message);
       process.exit(1);
