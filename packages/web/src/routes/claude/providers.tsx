@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
+import { Copy, Eye, EyeOff } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -40,6 +41,22 @@ const BASE_URL_PRESETS = [
 ];
 
 const empty: Provider = { name: '', baseUrl: '', token: '', model: '', haikuModel: '', sonnetModel: '', opusModel: '', env: {} };
+
+function randomCopyName(name: string, providers: Provider[]): string {
+  const base = name.trim() || 'provider';
+  const existing = new Set(providers.map((p) => p.name));
+  for (let i = 0; i < 20; i += 1) {
+    const candidate = `${base}-${Math.floor(1000 + Math.random() * 9000)}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  let index = 1;
+  let candidate = `${base}-${index}`;
+  while (existing.has(candidate)) {
+    index += 1;
+    candidate = `${base}-${index}`;
+  }
+  return candidate;
+}
 
 function BaseUrlField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -140,6 +157,19 @@ export function ClaudeProviders() {
     }
   };
 
+  const handleCopy = (provider: Provider) => {
+    const providers = data?.providers ?? [];
+    setShowToken(false);
+    setEditing({
+      original: null,
+      form: {
+        ...provider,
+        name: randomCopyName(provider.name, providers),
+        env: { ...(provider.env ?? {}) },
+      },
+    });
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -173,6 +203,10 @@ export function ClaudeProviders() {
                 <Button size="sm" onClick={() => apply.mutate(p.name)} disabled={apply.isPending}>
                   Apply
                 </Button>
+                <Button size="sm" variant="outline" onClick={() => handleCopy(p)}>
+                  <Copy className="mr-1.5 h-3.5 w-3.5" />
+                  Copy
+                </Button>
                 <Button size="sm" variant="outline" onClick={() => setEditing({ original: p.name, form: { ...p } })}>
                   Edit
                 </Button>
@@ -199,6 +233,7 @@ export function ClaudeProviders() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editing?.original ? 'Edit Provider' : 'Add Provider'}</DialogTitle>
+            <DialogDescription className="sr-only">Configure Claude provider</DialogDescription>
           </DialogHeader>
           {editing ? (
           <div className="grid gap-4">
