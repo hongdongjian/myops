@@ -43,9 +43,11 @@ export function parseClashYaml(text: string): ParsedClashResources {
     out.icon.push(u);
   };
 
-  for (const key of ['rule-providers', 'proxy-providers'] as const) {
-    const node = d[key];
-    if (!node || typeof node !== 'object') continue;
+  // proxy-providers (e.g. 机场订阅) are intentionally excluded: mirroring them locally
+  // strips upstream response headers (Subscription-Userinfo) and adds a manual refresh
+  // step, so Clash should always fetch those URLs directly.
+  const node = d['rule-providers'];
+  if (node && typeof node === 'object') {
     for (const entry of Object.values(node as Record<string, unknown>)) {
       if (entry && typeof entry === 'object') {
         const url = (entry as Record<string, unknown>).url;

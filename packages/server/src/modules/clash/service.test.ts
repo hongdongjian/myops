@@ -38,10 +38,10 @@ function makeDeps(): { deps: Deps; tmp: string } {
 }
 
 describe('clash parser', () => {
-  it('extracts list URLs from rule-providers and proxy-providers', () => {
+  it('extracts list URLs from rule-providers but not proxy-providers', () => {
     const parsed = parseClashYaml(sampleYaml);
     expect(parsed.list).toContain('https://example.com/lists/direct.list');
-    expect(parsed.list).toContain('https://example.com/sub.yaml');
+    expect(parsed.list).not.toContain('https://example.com/sub.yaml');
   });
 
   it('extracts icon URLs from proxy-groups', () => {
@@ -97,7 +97,7 @@ describe('clash service', () => {
     });
     const manifest = await svc.syncManifest();
     expect(manifest.list.find((e) => e.url === 'https://example.com/lists/direct.list')).toBeTruthy();
-    expect(manifest.list.find((e) => e.url === 'https://example.com/sub.yaml')).toBeTruthy();
+    expect(manifest.list.find((e) => e.url === 'https://example.com/sub.yaml')).toBeUndefined();
     expect(manifest.icon.find((e) => e.url === 'https://example.com/icons/hk.png')).toBeTruthy();
     expect(manifest.list.find((e) => e.filename === 'custom-abc.list' && e.source === 'local')).toBeTruthy();
   });
