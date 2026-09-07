@@ -43,6 +43,9 @@ npm run uninstall   # 对应 install 安装
 | `myops config pull` | 从 GitHub 拉取最新配置 |
 | `myops version` | 打印版本号 |
 
+定时任务的执行历史和对应日志按任务保留最近 500 次执行。新执行淘汰旧记录时，
+会在历史文件成功保存后删除该记录对应的日志；升级前已脱离历史索引的日志不会自动扫描或删除。
+
 ## 发布到 npm
 
 ```bash

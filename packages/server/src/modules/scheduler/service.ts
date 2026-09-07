@@ -8,6 +8,7 @@ import { AppError } from '../../core/errors.js';
 import type { ScheduledTask, TaskExecution } from './schema.js';
 
 export const SCHEDULER_TICK_MS = 3 * 1000;
+const MAX_EXECUTIONS = 500;
 
 function nowID(): string {
   return `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
@@ -360,9 +361,27 @@ export class SchedulerService {
     } else {
       history = [...history, exec];
     }
-    if (history.length > 500) history = history.slice(history.length - 500);
-    await fsp.mkdir(path.dirname(this.historyFile(taskID)), { recursive: true });
-    await fsp.writeFile(this.historyFile(taskID), JSON.stringify(history, null, 2));
+    const expired = history.slice(0, Math.max(0, history.length - MAX_EXECUTIONS));
+    history = history.slice(-MAX_EXECUTIONS);
+    const historyFile = this.historyFile(taskID);
+    await fsp.mkdir(path.dirname(historyFile), { recursive: true });
+    await fsp.writeFile(`${historyFile}.tmp`, JSON.stringify(history, null, 2));
+    await fsp.rename(`${historyFile}.tmp`, historyFile);
+
+    // Prune only records evicted by this write, after the new history is saved.
+    // Do not scan the log directory: it may contain millions of legacy files.
+    const logDir = path.resolve(this.dataDir, 'logs', taskID);
+    for (const entry of expired) {
+      const logFile = path.resolve(logDir, `${entry.id}.log`);
+      if (path.dirname(logFile) !== logDir) continue;
+      try {
+        await fsp.unlink(logFile);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.warn('Failed to remove expired scheduler log:', logFile, err);
+        }
+      }
+    }
   }
 }
 
