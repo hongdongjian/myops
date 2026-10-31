@@ -173,7 +173,9 @@ export function ClaudeSettings() {
             Target: <code>{settings?.path || '~/.claude/settings.json'}</code>
           </div>
           <div className="text-xs text-muted-foreground">
-            Apply strategy: overwrite <code>~/.claude/settings.json</code> entirely with the template content.
+            应用规则：保留目标文件中已有的 <code>enabledPlugins</code>、
+            <code>extraKnownMarketplaces</code> 和 <code>statusLine</code>；
+            其余字段按模板整体覆盖，模板未包含的字段将删除。
           </div>
           <textarea
             value={tplContent}

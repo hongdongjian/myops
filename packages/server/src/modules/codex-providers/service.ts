@@ -19,7 +19,7 @@ export class CodexProvidersService {
   }
 
   storePath(): string {
-    return this.deps.paths.dataPath('codex-providers.json');
+    return this.deps.paths.confPath('codex', 'providers.json');
   }
 
   async readStore(): Promise<ProvidersStore> {

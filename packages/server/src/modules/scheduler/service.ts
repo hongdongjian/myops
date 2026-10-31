@@ -8,7 +8,7 @@ import { AppError } from '../../core/errors.js';
 import type { ScheduledTask, TaskExecution } from './schema.js';
 
 export const SCHEDULER_TICK_MS = 3 * 1000;
-const MAX_EXECUTIONS = 500;
+const MAX_EXECUTIONS = 30;
 
 function nowID(): string {
   return `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
@@ -153,8 +153,26 @@ export class SchedulerService {
   }
 
   async deleteTask(id: string): Promise<void> {
-    this.tasks = this.tasks.filter((t) => t.id !== id);
-    await this.persistTasks();
+    if (!id || id === '.' || id === '..' || path.basename(id) !== id || id.includes('\0')) {
+      throw new AppError('INVALID_INPUT', 'invalid task id', 400);
+    }
+    await this.mu.runExclusive(async () => {
+      if (this.running.has(id)) {
+        throw new AppError('TASK_BUSY', 'task is running, wait for it to finish before deleting', 409);
+      }
+      const previous = this.tasks;
+      this.tasks = this.tasks.filter((t) => t.id !== id);
+      try {
+        await this.persistTasks();
+      } catch (err) {
+        this.tasks = previous;
+        throw err;
+      }
+    });
+    const historyFile = this.historyFile(id);
+    await fsp.rm(historyFile, { force: true });
+    await fsp.rm(`${historyFile}.tmp`, { force: true });
+    await fsp.rm(path.join(this.dataDir, 'logs', id), { recursive: true, force: true });
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<void> {
@@ -222,10 +240,10 @@ export class SchedulerService {
       command = task.command;
       taskName = task.name;
       scheduleType = task.scheduleType;
+      await this.persistTasks();
     } finally {
       release();
     }
-    await this.persistTasks();
 
     const execID = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
     const logDir = path.join(this.dataDir, 'logs', taskID);
@@ -309,10 +327,10 @@ export class SchedulerService {
           task.status = 'stopped';
         }
       }
+      await this.persistTasks();
     } finally {
       release2();
     }
-    await this.persistTasks();
   }
 
   // ── persistence ──────────────────────────────────────────────────────────

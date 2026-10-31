@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import YAML from 'yaml';
 import { ClashService, buildClashSubscribe } from './service.js';
 import { parseClashYaml, extractGroupNames } from './parser.js';
 import { emptyManifest } from './schema.js';
@@ -145,6 +146,116 @@ describe('clash service', () => {
 });
 
 describe('buildClashSubscribe', () => {
+  it.each([
+    'http://127.0.0.1:3333',
+    'http://127.0.0.2:3333',
+    'http://localhost:3333',
+    'http://localhost.:3333',
+    'http://[::1]:3333',
+    'https://myops.example.com',
+    'http://127.example.com:3333',
+    'http://192.168.1.10:3333',
+  ])(
+    'downloads all HTTP rule-providers directly for %s',
+    (baseUrl) => {
+      const template = YAML.parse(sampleYaml);
+      template['rule-providers'].Direct.proxy = 'RemoteProxy';
+      template['rule-providers'].Local = {
+        type: 'http',
+        url: `${baseUrl}/local.list`,
+        proxy: 'RemoteProxy',
+      };
+      template['rule-providers'].External = {
+        type: 'http',
+        url: 'https://external.example.com/rules.list',
+        proxy: 'RemoteProxy',
+      };
+      template['rule-providers'].File = {
+        type: 'file',
+        path: './rules/local.list',
+      };
+      template['proxy-providers'].Sub = {
+        type: 'http',
+        url: `${baseUrl}/sub.yaml`,
+        proxy: 'RemoteProxy',
+      };
+      const manifest = emptyManifest();
+      manifest.list.push({
+        url: 'https://example.com/lists/direct.list',
+        filename: 'direct.list',
+        source: 'remote',
+      });
+
+      const out = YAML.parse(buildClashSubscribe(
+        YAML.stringify(template),
+        {
+          custom_proxies: [],
+          custom_rules: [
+            { id: 'abc', name: 'MyRules', target_group: '香港节点', behavior: 'classical', rules: [], enabled: true },
+          ],
+        },
+        manifest,
+        baseUrl,
+      ));
+
+      expect(out['rule-providers'].Direct).toMatchObject({
+        url: `${baseUrl}/api/clash/static/list/direct.list`,
+        proxy: 'DIRECT',
+      });
+      expect(out['rule-providers'].MyRules).toMatchObject({
+        url: `${baseUrl}/api/clash/static/list/custom-abc.list`,
+        proxy: 'DIRECT',
+      });
+      expect(out['rule-providers'].Local).toMatchObject({
+        url: `${baseUrl}/local.list`,
+        proxy: 'DIRECT',
+      });
+      expect(out['rule-providers'].External).toMatchObject({
+        url: 'https://external.example.com/rules.list',
+        proxy: 'DIRECT',
+      });
+      expect(out['rule-providers'].File).toEqual(template['rule-providers'].File);
+      expect(out['proxy-providers']).toEqual(template['proxy-providers']);
+    },
+  );
+
+  it.each(['https://myops.example.com', 'http://127.example.com:3333'])(
+    'downloads rule-providers directly using configured public base %s',
+    (baseUrl) => {
+      const template = YAML.parse(sampleYaml);
+      template['rule-providers'].Direct.proxy = 'RemoteProxy';
+      const manifest = emptyManifest();
+      manifest.list.push({
+        url: 'https://example.com/lists/direct.list',
+        filename: 'direct.list',
+        source: 'remote',
+      });
+
+      const out = YAML.parse(buildClashSubscribe(
+        YAML.stringify(template),
+        {
+          public_base_url: baseUrl,
+          custom_proxies: [],
+          custom_rules: [
+            { id: 'abc', name: 'MyRules', target_group: '香港节点', behavior: 'classical', rules: [], enabled: true },
+          ],
+        },
+        manifest,
+        baseUrl,
+      ));
+
+      expect(out['rule-providers'].Direct).toMatchObject({
+        url: `${baseUrl}/api/clash/static/list/direct.list`,
+        proxy: 'DIRECT',
+      });
+      expect(out['rule-providers'].MyRules).toMatchObject({
+        url: `${baseUrl}/api/clash/static/list/custom-abc.list`,
+        proxy: 'DIRECT',
+      });
+      expect(out['proxy-providers']).toEqual(template['proxy-providers']);
+    },
+  );
+
   it('prepends custom proxies and rules; rewrites remote URLs to local static paths', () => {
     const manifest = emptyManifest();
     manifest.list.push({

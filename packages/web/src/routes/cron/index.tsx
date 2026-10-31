@@ -623,7 +623,7 @@ export function CronJobs() {
                     size="sm"
                     variant="destructive"
                     onClick={() => {
-                      if (window.confirm(`Delete task "${t.name}"?`)) del.mutate(t.id);
+                      if (window.confirm(`Delete task "${t.name}" and its execution history and logs?`)) del.mutate(t.id);
                     }}
                     disabled={del.isPending}
                   >

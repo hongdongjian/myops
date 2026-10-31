@@ -20,7 +20,7 @@ export class ClaudeProvidersService {
   }
 
   storePath(): string {
-    return this.deps.paths.dataPath('claude-providers.json');
+    return this.deps.paths.confPath('claude', 'providers.json');
   }
 
   async readStore(): Promise<ProvidersStore> {

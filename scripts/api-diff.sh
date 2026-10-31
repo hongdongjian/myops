@@ -18,22 +18,6 @@ ENDPOINTS=(
   "/api/health"
   "/api/server/models"
 
-  "/api/copilot/status"
-  "/api/copilot/config"
-  "/api/copilot/autostart"
-  "/api/copilot/proxy"
-  "/api/copilot/source"
-  "/api/copilot/usage"
-  "/api/copilot/logs"
-  "/api/copilot/config/sync-status"
-
-  "/api/copilot/accounts"
-  "/api/copilot/accounts/oauth/status"
-
-  "/api/mcp/xiaohongshu/status"
-  "/api/mcp/xiaohongshu/autostart"
-  "/api/mcp/xiaohongshu/logs"
-
   "/api/claude/settings"
   "/api/claude/settings/template"
   "/api/claude/onboarding"

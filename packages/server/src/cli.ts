@@ -15,7 +15,6 @@ import { ProcessManager } from './core/process/manager.js';
 const _require = createRequire(import.meta.url);
 const PKG_VERSION: string = (_require('../package.json') as { version: string }).version;
 import { buildApp } from './server.js';
-import { CopilotAccountsService } from './modules/copilot-accounts/service.js';
 import { startAutostartLoops, stopAutostartLoops } from './core/autostart.js';
 import { ClaudeProvidersService } from './modules/claude-providers/service.js';
 import { ConfigSyncService } from './modules/config-sync/service.js';
@@ -99,8 +98,7 @@ program
     const store = new StateStore(paths.dataPath('state.json'));
     const processMgr = new ProcessManager(store, paths.dataPath('logs'));
     const runner = new Runner();
-    const copilotAccounts = new CopilotAccountsService(paths);
-    const deps = { paths, runner, store, processMgr, copilotAccounts };
+    const deps = { paths, runner, store, processMgr };
     const app = await buildApp(deps);
     await app.listen({ port, host: '127.0.0.1' });
     startAutostartLoops(deps);

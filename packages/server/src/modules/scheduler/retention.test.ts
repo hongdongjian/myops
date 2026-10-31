@@ -9,7 +9,7 @@ import { SchedulerService } from './service.js';
 
 afterEach(() => vi.restoreAllMocks());
 
-async function makeFixture(command = "printf 'nothing changed'") {
+async function makeFixture(command = "printf 'nothing changed'", historySize = 30) {
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'scheduler-retention-'));
   onTestFinished(() => fsp.rm(tmp, { recursive: true, force: true }));
   const paths = createPaths(tmp);
@@ -25,7 +25,7 @@ async function makeFixture(command = "printf 'nothing changed'") {
   const logDir = paths.dataPath('scheduler', 'logs', task.id);
   const historyFile = paths.dataPath('scheduler', 'history', `${task.id}.json`);
   await fsp.mkdir(logDir, { recursive: true });
-  const history: TaskExecution[] = Array.from({ length: 500 }, (_, i) => ({
+  const history: TaskExecution[] = Array.from({ length: historySize }, (_, i) => ({
     id: `${i + 1}`,
     taskId: task.id,
     startTime: new Date(i * 1000).toISOString(),
@@ -41,17 +41,18 @@ async function makeFixture(command = "printf 'nothing changed'") {
 
 describe('scheduler log retention', () => {
   it.each([
-    { command: "printf 'nothing changed'", success: true },
-    { command: "printf 'failed' >&2; exit 1", success: false },
-  ])('bounds logs for repeated executions (success=$success)', async ({ command, success }) => {
-    const { svc, task, logDir } = await makeFixture(command);
+    { command: "printf 'nothing changed'", success: true, historySize: 30 },
+    { command: "printf 'failed' >&2; exit 1", success: false, historySize: 30 },
+    { command: "printf 'nothing changed'", success: true, historySize: 500 },
+  ])('bounds logs for repeated executions (success=$success, initial=$historySize)', async ({ command, success, historySize }) => {
+    const { svc, task, logDir } = await makeFixture(command, historySize);
     const legacyLog = path.join(logDir, 'legacy.log');
     await fsp.writeFile(legacyLog, 'existing untracked log');
 
     for (let i = 0; i < 3; i++) {
       await svc['runTask'](task.id);
       const executions = await svc.listExecutions(task.id);
-      expect(executions).toHaveLength(500);
+      expect(executions).toHaveLength(30);
       expect(executions[0]).toMatchObject({ success, running: false });
       expect((await fsp.readdir(logDir)).sort()).toEqual(
         [...executions.map((exec) => `${exec.id}.log`), 'legacy.log'].sort(),
@@ -69,7 +70,7 @@ describe('scheduler log retention', () => {
     await svc['runTask'](task.id);
     await svc['runTask'](task.id);
 
-    expect(await fsp.readdir(logDir)).toHaveLength(500);
+    expect(await fsp.readdir(logDir)).toHaveLength(30);
     expect(svc.getTask(task.id)?.status).toBe('scheduled');
   });
 
@@ -94,7 +95,7 @@ describe('scheduler log retention', () => {
     await svc['runTask'](task.id);
 
     expect(svc.getTask(task.id)?.status).toBe('scheduled');
-    expect(await svc.listExecutions(task.id)).toHaveLength(500);
+    expect(await svc.listExecutions(task.id)).toHaveLength(30);
     expect(warn).toHaveBeenCalledWith(expect.any(String), history[0]!.logFile, failure);
   });
 

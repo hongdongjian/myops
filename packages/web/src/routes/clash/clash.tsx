@@ -52,6 +52,11 @@ interface ClashResource {
 }
 type ClashManifest = Record<ClashResourceGroup, ClashResource[]>;
 
+interface QxReport {
+  stats: { nodes: number; groups: number; rules: number; skippedNodes: number; skippedRules: number };
+  issues: { code: string; message: string; count: number }[];
+}
+
 const apiPut = (path: string, body: unknown) =>
   api(path, { method: 'PUT', body: JSON.stringify(body) });
 const apiDelete = (path: string, body: unknown) =>
@@ -75,6 +80,11 @@ function randomId(): string {
 export function ClashTab() {
   const qc = useQueryClient();
   const toast = useToast();
+
+  const qxReport = useMutation({
+    mutationFn: () => apiGet<QxReport>('/api/clash/quantumultx/report'),
+    onError: (error: Error) => toast.error(error.message),
+  });
 
   const configQuery = useQuery<ClashConfig>({
     queryKey: ['clash', 'config'],
@@ -112,6 +122,7 @@ export function ClashTab() {
     onSuccess: () => {
       toast.success('YAML 模板已保存，资源开始后台下载');
       setDraft(null);
+      qxReport.reset();
       qc.invalidateQueries({ queryKey: ['clash', 'template'] });
       qc.invalidateQueries({ queryKey: ['clash', 'resources'] });
       qc.invalidateQueries({ queryKey: ['clash', 'groups'] });
@@ -123,6 +134,7 @@ export function ClashTab() {
     mutationFn: (next: ClashConfig) => apiPut('/api/clash/config', next),
     onSuccess: () => {
       toast.success('已保存');
+      qxReport.reset();
       qc.invalidateQueries({ queryKey: ['clash', 'config'] });
       qc.invalidateQueries({ queryKey: ['clash', 'resources'] });
     },
@@ -213,9 +225,10 @@ export function ClashTab() {
   const subscribeUrl = useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3333';
     const key = cfg?.api_key;
-    return key ? `${origin}/api/clash/subscribe?api-key=${key}` : `${origin}/api/clash/subscribe`;
+    return key ? `${origin}/api/clash/subscribe?api-key=${encodeURIComponent(key)}` : `${origin}/api/clash/subscribe`;
   }, [cfg?.api_key]);
 
+  const qxSubscribeUrl = subscribeUrl.replace('/api/clash/subscribe', '/api/qx/subscribe');
   const anyRefreshing = refreshing.size > 0;
 
   const handleProxySubmit = (p: ClashProxy) => {
@@ -269,6 +282,7 @@ export function ClashTab() {
     <div className="space-y-4">
       <SubscribeCard
         subscribeUrl={subscribeUrl}
+        qxSubscribeUrl={qxSubscribeUrl}
         hasKey={!!cfg?.api_key}
         onRotate={() => rotateKey.mutate()}
         rotating={rotateKey.isPending}
@@ -276,6 +290,34 @@ export function ClashTab() {
         onSaveBaseUrl={(b) => saveBaseUrl.mutate(b)}
         savingBaseUrl={saveBaseUrl.isPending}
       />
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
+          <div className="space-y-1">
+            <CardTitle>Quantumult X 转换</CardTitle>
+            <p className="text-xs text-muted-foreground">使用当前已保存的 Clash 配置生成，仅包含节点、策略和分流。</p>
+          </div>
+          <Button size="sm" variant="outline" disabled={qxReport.isPending} onClick={() => qxReport.mutate()}>
+            {qxReport.isPending ? '检查中…' : '检查转换'}
+          </Button>
+        </CardHeader>
+        {qxReport.data ? (
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="secondary">{qxReport.data.stats.nodes} 个节点</Badge>
+              <Badge variant="secondary">{qxReport.data.stats.groups} 个策略组</Badge>
+              <Badge variant="secondary">{qxReport.data.stats.rules} 条规则</Badge>
+              {qxReport.data.stats.skippedNodes > 0 ? <Badge variant="outline">跳过 {qxReport.data.stats.skippedNodes} 个节点</Badge> : null}
+              {qxReport.data.stats.skippedRules > 0 ? <Badge variant="outline">跳过 {qxReport.data.stats.skippedRules} 条规则</Badge> : null}
+            </div>
+            <ul className="space-y-1.5 text-xs text-muted-foreground">
+              {qxReport.data.issues.map(issue => (
+                <li key={issue.code}>{issue.message}{issue.count > 1 ? '（' + issue.count + ' 项）' : ''}</li>
+              ))}
+            </ul>
+          </CardContent>
+        ) : null}
+      </Card>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
@@ -302,7 +344,7 @@ export function ClashTab() {
             placeholder="# 粘贴 Clash YAML（包含 proxy-providers / proxy-groups / rule-providers / rules）..."
           />
           <p className="mt-2 text-xs text-muted-foreground">
-            保存后会自动解析 rule-providers / proxy-providers 中的远程 URL 以及 proxy-groups 的 icon 图片，下载到本地并在订阅中替换为本服务的 /api/clash/static/ 链接。
+            保存后下载规则集和分组图标。Clash 订阅保留机场直连地址；QX 订阅由服务端读取机场节点并缓存，再按当前配置自动生成。
           </p>
         </CardContent>
       </Card>
@@ -376,6 +418,10 @@ export function ClashTab() {
         </Button>
       </div>
 
+      <p className="text-xs text-muted-foreground">
+        系统内置规则自动刷新：启动时及每 5 分钟检查，按模板 interval 更新（默认 24 小时），失败保留旧内容。定时刷新只更新规则，“全量刷新”还会更新图标。
+      </p>
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {RESOURCE_GROUPS.map((g) => (
           <ResourceGroup
@@ -413,6 +459,7 @@ export function ClashTab() {
 
 function SubscribeCard({
   subscribeUrl,
+  qxSubscribeUrl,
   hasKey,
   onRotate,
   rotating,
@@ -421,6 +468,7 @@ function SubscribeCard({
   savingBaseUrl,
 }: {
   subscribeUrl: string;
+  qxSubscribeUrl: string;
   hasKey: boolean;
   onRotate: () => void;
   rotating: boolean;
@@ -437,25 +485,28 @@ function SubscribeCard({
         <CardTitle>订阅地址</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Input value={subscribeUrl} readOnly className="font-mono text-xs" />
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                navigator.clipboard.writeText(subscribeUrl).then(
+        {[
+          { label: 'Clash', url: subscribeUrl },
+          { label: 'Quantumult X', url: qxSubscribeUrl },
+        ].map(entry => (
+          <div key={entry.label} className="space-y-1">
+            <Label className="text-xs text-muted-foreground">{entry.label}</Label>
+            <div className="flex items-center gap-2">
+              <Input aria-label={entry.label + ' 订阅地址'} value={entry.url} readOnly className="font-mono text-xs" />
+              <Button size="sm" variant="outline" onClick={() => {
+                navigator.clipboard.writeText(entry.url).then(
                   () => toast.success('已复制'),
                   () => toast.error('复制失败'),
                 );
-              }}
-            >
-              复制
-            </Button>
-            <Button size="sm" variant="outline" onClick={onRotate} disabled={rotating}>
-              {hasKey ? '轮换密钥' : '生成密钥'}
-            </Button>
+              }}>复制</Button>
+            </div>
           </div>
+        ))}
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">两种订阅共用 Clash 配置和密钥。QX 不包含重写、脚本或 MITM。</p>
+          <Button size="sm" variant="outline" onClick={onRotate} disabled={rotating}>
+            {hasKey ? '轮换密钥' : '生成密钥'}
+          </Button>
         </div>
         <div className="flex items-center gap-2">
           <Label className="shrink-0 text-xs text-muted-foreground">公网地址</Label>

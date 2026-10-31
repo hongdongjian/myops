@@ -1,12 +1,9 @@
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { cn } from './lib/cn';
-import { Copilot } from './routes/copilot';
-import { Mcp } from './routes/mcp';
 import { Claude } from './routes/claude';
 import { Codex } from './routes/codex';
 import { CronJobs } from './routes/cron';
 import { Clash } from './routes/clash';
-import { QuantumultX } from './routes/quantumultx';
 
 interface NavItem {
   to: string;
@@ -23,10 +20,8 @@ const navSections: NavSection[] = [
   {
     title: 'AGENTS',
     items: [
-      { to: '/copilot', label: 'Copilot', hint: 'cp' },
       { to: '/claude', label: 'Claude', hint: 'cl' },
       { to: '/codex', label: 'Codex', hint: 'cx' },
-      { to: '/mcp', label: 'MCP', hint: 'mc' },
     ],
   },
   {
@@ -34,7 +29,6 @@ const navSections: NavSection[] = [
     items: [
       { to: '/cron', label: 'Cron', hint: 'cr' },
       { to: '/clash', label: 'Clash', hint: 'ch' },
-      { to: '/quantumultx', label: 'QuantumultX', hint: 'qx' },
     ],
   },
 ];
@@ -134,14 +128,12 @@ export function App() {
       <main className="flex-1 overflow-auto">
         <div className="mx-auto max-w-7xl px-8 py-8">
           <Routes>
-            <Route path="/" element={<Navigate to="/copilot" replace />} />
-            <Route path="/copilot/*" element={<Copilot />} />
-            <Route path="/mcp/*" element={<Mcp />} />
+            <Route path="/" element={<Navigate to="/claude" replace />} />
             <Route path="/claude/*" element={<Claude />} />
             <Route path="/codex/*" element={<Codex />} />
             <Route path="/cron/*" element={<CronJobs />} />
             <Route path="/clash/*" element={<Clash />} />
-            <Route path="/quantumultx/*" element={<QuantumultX />} />
+            <Route path="/quantumultx/*" element={<Navigate to="/clash" replace />} />
           </Routes>
         </div>
       </main>

@@ -20,6 +20,7 @@ import { extractGroupNames, parseClashYaml, urlToFilename } from './parser.js';
 
 export const CLASH_FETCH_TIMEOUT_MS = 30 * 1000;
 export const CLASH_CONCURRENCY = 4;
+export const CLASH_DEFAULT_RULE_INTERVAL_SECONDS = 24 * 60 * 60;
 
 function envProxy(): string | undefined {
   return (
@@ -44,19 +45,20 @@ function getProxyAgent(): ProxyAgent | undefined {
   return cachedProxy.agent;
 }
 
-async function fetchWithProxy(
+export async function fetchWithProxy(
   url: string,
   signal: AbortSignal,
+  headers?: Record<string, string>,
 ): Promise<{ ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer> }> {
   const dispatcher = getProxyAgent();
   if (dispatcher) {
-    return undiciFetch(url, { signal, dispatcher }) as unknown as Promise<{
+    return undiciFetch(url, { signal, dispatcher, headers }) as unknown as Promise<{
       ok: boolean;
       status: number;
       arrayBuffer(): Promise<ArrayBuffer>;
     }>;
   }
-  return fetch(url, { signal }) as unknown as Promise<{
+  return fetch(url, { signal, headers }) as unknown as Promise<{
     ok: boolean;
     status: number;
     arrayBuffer(): Promise<ArrayBuffer>;
@@ -65,6 +67,7 @@ async function fetchWithProxy(
 
 export class ClashService {
   private readonly mu = new Mutex();
+  private readonly refreshMu = new Mutex();
 
   constructor(private readonly deps: Deps) {}
 
@@ -299,7 +302,7 @@ export class ClashService {
         next[group] = merged;
       }
 
-      await this.saveManifest(next);
+      if (JSON.stringify(next) !== JSON.stringify(current)) await this.saveManifest(next);
       return next;
     } finally {
       release();
@@ -325,6 +328,49 @@ export class ClashService {
   }
 
   async refresh(group?: ClashResourceGroup, url?: string): Promise<ClashManifest> {
+    return this.refreshMu.runExclusive(() => this.refreshResources(group, url));
+  }
+
+  async refreshDueRules(signal?: AbortSignal): Promise<{ refreshed: number; failed: number }> {
+    return this.refreshMu.runExclusive(async () => {
+      let refreshed = 0;
+      let failed = 0;
+      if (signal?.aborted) return { refreshed, failed };
+      const manifest = await this.syncManifest();
+      const template = YAML.parse(await this.loadTemplate()) ?? {};
+      const intervals = new Map<string, number>();
+      for (const provider of Object.values(template['rule-providers'] ?? {}) as Record<string, unknown>[]) {
+        if (!provider || typeof provider.url !== 'string') continue;
+        const seconds = Number(provider.interval);
+        const interval = Number.isFinite(seconds) && seconds > 0 ? seconds : CLASH_DEFAULT_RULE_INTERVAL_SECONDS;
+        intervals.set(provider.url, Math.min(interval, intervals.get(provider.url) ?? interval));
+      }
+      const due: ClashResource[] = [];
+      for (const entry of manifest.list) {
+        if (entry.source === 'local') continue;
+        let modified: number | undefined;
+        try { modified = (await fsp.stat(path.join(this.groupDir('list'), entry.filename))).mtimeMs; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        const lastSuccess = entry.updatedAt ?? modified ?? 0;
+        const interval = (intervals.get(entry.url) ?? CLASH_DEFAULT_RULE_INTERVAL_SECONDS) * 1000;
+        if (modified === undefined || Date.now() - lastSuccess >= interval) due.push(entry);
+      }
+      await fsp.mkdir(this.groupDir('list'), { recursive: true });
+      for (let i = 0; i < due.length && !signal?.aborted; i += CLASH_CONCURRENCY) {
+        await Promise.all(due.slice(i, i + CLASH_CONCURRENCY).map(async entry => {
+          try {
+            const next = await this.refreshSingle('list', entry.url, signal);
+            if (signal?.aborted) return;
+            if (next.list.find(resource => resource.url === entry.url)?.error) failed++;
+            else refreshed++;
+          } catch { if (!signal?.aborted) failed++; }
+        }));
+      }
+      return { refreshed, failed };
+    });
+  }
+
+  private async refreshResources(group?: ClashResourceGroup, url?: string): Promise<ClashManifest> {
     if (url) {
       const g = group;
       if (!g) throw new AppError('CLASH_REFRESH', 'group is required when url is provided', 400);
@@ -357,7 +403,7 @@ export class ClashService {
     }
   }
 
-  private async refreshSingle(group: ClashResourceGroup, url: string): Promise<ClashManifest> {
+  private async refreshSingle(group: ClashResourceGroup, url: string, signal?: AbortSignal): Promise<ClashManifest> {
     const manifest = await this.loadManifest();
     const entry = manifest[group].find((e) => e.url === url);
     if (!entry) {
@@ -366,7 +412,8 @@ export class ClashService {
     if (entry.source === 'local') return manifest;
     await fsp.mkdir(this.groupDir(group), { recursive: true });
     const result: ClashResource = { ...entry };
-    await this.downloadOne(group, result);
+    await this.downloadOne(group, result, signal);
+    if (signal?.aborted) return this.loadManifest();
 
     const release = await this.mu.acquire();
     try {
@@ -388,31 +435,70 @@ export class ClashService {
     }
   }
 
-  private async downloadOne(group: ClashResourceGroup, entry: ClashResource): Promise<void> {
+  private async validateResource(group: ClashResourceGroup, url: string, buffer: Buffer): Promise<void> {
+    if (!buffer.length) throw new Error('资源内容为空');
+    const prefix = buffer.subarray(0, 512).toString('utf-8').trim();
+    if (/^(<!doctype\s+html\b|<html\b)/i.test(prefix)) throw new Error('资源返回了 HTML 页面');
+    if (group !== 'list') return;
+    const template = YAML.parse(await this.loadTemplate()) ?? {};
+    const providers = (Object.values(template['rule-providers'] ?? {}) as Record<string, unknown>[]).filter(provider => provider?.url === url);
+    for (const provider of providers) {
+      if (provider.format === 'mrs') continue;
+      const text = buffer.toString('utf-8').trim();
+      if (!text) throw new Error('规则内容为空');
+      if (provider.format === 'text') {
+        const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line && !/^(#|;|\/\/)/.test(line));
+        if (!lines.length) throw new Error('资源未包含规则');
+        const valid = lines.every(line => {
+          if (provider.behavior === 'domain') return !/[,\s<>]/.test(line);
+          if (provider.behavior === 'ipcidr') return /^[\da-fA-F.:]+\/\d+$/.test(line);
+          return /^[A-Z][A-Z0-9-]*\s*,/.test(line);
+        });
+        if (!valid) throw new Error('规则内容格式无效');
+      } else {
+        const parsed = YAML.parse(text);
+        const payload = Array.isArray(parsed) ? parsed : parsed?.payload;
+        if (!Array.isArray(payload) || !payload.every(line => typeof line === 'string')) throw new Error('规则 YAML 必须包含 payload 数组');
+      }
+    }
+  }
+
+  private async downloadOne(group: ClashResourceGroup, entry: ClashResource, signal?: AbortSignal): Promise<void> {
+    let temporary: string | undefined;
     try {
       const ctrl = new AbortController();
+      const abort = () => ctrl.abort();
+      if (signal?.aborted) return;
+      signal?.addEventListener('abort', abort, { once: true });
       const timer = setTimeout(() => ctrl.abort(), CLASH_FETCH_TIMEOUT_MS);
       let buf: Buffer;
       try {
         const res = await fetchWithProxy(entry.url, ctrl.signal);
-        if (!res.ok) throw new Error(`status ${res.status}`);
-        const ab = await res.arrayBuffer();
-        buf = Buffer.from(ab);
+        if (!res.ok) throw new Error('status ' + res.status);
+        buf = Buffer.from(await res.arrayBuffer());
       } finally {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
       }
+      await this.validateResource(group, entry.url, buf);
+      if (signal?.aborted) return;
       const dest = path.join(this.groupDir(group), entry.filename);
-      await fsp.writeFile(dest, buf);
+      temporary = dest + '.' + crypto.randomUUID() + '.tmp';
+      await fsp.writeFile(temporary, buf);
+      await fsp.rename(temporary, dest);
       entry.size = buf.byteLength;
       entry.updatedAt = Date.now();
       entry.error = undefined;
     } catch (err) {
+      if (signal?.aborted) return;
       const usedProxy = envProxy();
       const cause = (err as Error & { cause?: { code?: string; message?: string } }).cause;
       const reason = cause?.message ?? cause?.code ?? (err as Error).message;
       entry.error = usedProxy
-        ? `${reason}（代理: ${usedProxy}）`
-        : `${reason}（提示：可设置 HTTPS_PROXY 环境变量）`;
+        ? reason + '（代理: ' + usedProxy + '）'
+        : reason + '（提示：可设置 HTTPS_PROXY 环境变量）';
+    } finally {
+      if (temporary) await fsp.unlink(temporary).catch(() => undefined);
     }
   }
 
@@ -525,6 +611,25 @@ export function buildClashSubscribe(
   baseUrl: string,
 ): string {
   const base = baseUrl.replace(/\/+$/, '');
+  let out = YAML.stringify(buildClashDocument(templateText, cfg, baseUrl));
+  const mapping = new Map<string, string>();
+  for (const group of CLASH_GROUPS) {
+    for (const entry of manifest[group]) {
+      if (entry.source === 'local') continue;
+      mapping.set(entry.url, base + '/api/clash/static/' + group + '/' + encodeURIComponent(entry.filename));
+    }
+  }
+  const sortedUrls = Array.from(mapping.keys()).sort((a, b) => b.length - a.length);
+  for (const url of sortedUrls) out = out.split(url).join(mapping.get(url)!);
+  return out;
+}
+
+export function buildClashDocument(
+  templateText: string,
+  cfg: ClashConfig,
+  baseUrl: string,
+): Record<string, unknown> {
+  const base = baseUrl.replace(/\/+$/, '');
   let doc: Record<string, unknown>;
   try {
     doc = (YAML.parse(templateText) ?? {}) as Record<string, unknown>;
@@ -558,19 +663,16 @@ export function buildClashSubscribe(
     doc.rules = [...prepend, ...existing];
   }
 
-  let out = YAML.stringify(doc);
-
-  const mapping = new Map<string, string>();
-  for (const group of CLASH_GROUPS) {
-    for (const entry of manifest[group]) {
-      if (entry.source === 'local') continue;
-      mapping.set(entry.url, `${base}/api/clash/static/${group}/${encodeURIComponent(entry.filename)}`);
+  const providers = doc['rule-providers'];
+  if (providers && typeof providers === 'object') {
+    for (const value of Object.values(providers)) {
+      if (!value || typeof value !== 'object') continue;
+      const provider = value as Record<string, unknown>;
+      if (provider.type !== 'http' || typeof provider.url !== 'string') continue;
+      // Rule downloads must not depend on the rules they are about to load.
+      provider.proxy = 'DIRECT';
     }
   }
-  const sortedUrls = Array.from(mapping.keys()).sort((a, b) => b.length - a.length);
-  for (const url of sortedUrls) {
-    const local = mapping.get(url)!;
-    out = out.split(url).join(local);
-  }
-  return out;
+
+  return doc;
 }

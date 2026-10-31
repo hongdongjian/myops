@@ -1,8 +1,11 @@
 import fp from 'fastify-plugin';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { Deps } from '../../deps.js';
 import { ClashService } from './service.js';
+import { startClashRuleRefresh } from './auto-refresh.js';
+import { ClashQuantumultXService } from './quantumultx-service.js';
 import { AppError } from '../../core/errors.js';
 import {
   AddBodySchema,
@@ -36,6 +39,10 @@ const MIME: Record<string, string> = {
 
 export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
   const service = new ClashService(opts.deps);
+  const quantumultx = new ClashQuantumultXService(service, opts.deps.paths);
+  let stopAutoRefresh: (() => Promise<void>) | undefined;
+  app.addHook('onReady', async () => { stopAutoRefresh = startClashRuleRefresh(service, app.log); });
+  app.addHook('onClose', async () => { await stopAutoRefresh?.(); });
 
   app.get('/api/clash/config', async (): Promise<ApiEnvelope> => {
     const data = await service.loadConfig();
@@ -115,7 +122,13 @@ export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
     reply.header('Content-Type', mime).header('Cache-Control', 'public, max-age=300').send(data);
   });
 
-  app.get('/api/clash/subscribe', async (req, reply) => {
+  app.get('/api/clash/quantumultx/report', async (): Promise<ApiEnvelope> => {
+    const cfg = await service.loadConfig();
+    const result = await quantumultx.build(cfg.public_base_url?.trim().replace(/\/+$/, '') || 'http://127.0.0.1:3333');
+    return { success: true, data: { stats: result.stats, issues: result.issues } };
+  });
+
+  const subscriptionConfig = async (req: FastifyRequest) => {
     const cfg = await service.loadConfig();
     if (cfg.api_key) {
       const provided = (req.query as Record<string, string>)['api-key'];
@@ -123,12 +136,38 @@ export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
         throw new AppError('CLASH_UNAUTHORIZED', 'invalid or missing api-key', 401);
       }
     }
+    return cfg;
+  };
+  app.get('/api/qx/rules/:id', async (req, reply) => {
+    await subscriptionConfig(req);
+    const id = (req.params as { id: string }).id;
+    if (!/^[a-f0-9]{24}$/.test(id)) throw new AppError('QX_RULE_NOT_FOUND', '规则资源不存在', 404);
+    const content = await quantumultx.buildRuleResource(id);
+    return reply.header('Content-Type', 'text/plain; charset=utf-8').send(content);
+  });
+  const sendSubscription = async (req: FastifyRequest, reply: FastifyReply, format: 'clash' | 'quantumultx') => {
+    const cfg = await subscriptionConfig(req);
     const configured = cfg.public_base_url?.trim().replace(/\/+$/, '');
     const baseUrl = configured || 'http://127.0.0.1:3333';
+    if (format === 'quantumultx') {
+      const result = await quantumultx.build(baseUrl);
+      return reply
+        .header('Content-Type', 'text/plain; charset=utf-8')
+        .header('Content-Disposition', 'attachment; filename="QuantumultX.conf"')
+        .header('X-QX-Skipped-Nodes', String(result.stats.skippedNodes))
+        .header('X-QX-Skipped-Rules', String(result.stats.skippedRules))
+        .send(result.content);
+    }
     const merged = await service.buildSubscribe(baseUrl);
     reply
       .header('Content-Type', 'text/yaml; charset=utf-8')
       .header('Content-Disposition', 'attachment; filename="clash-config.yaml"')
       .send(merged);
+  };
+  app.get('/api/clash/subscribe', async (req, reply) => {
+    const format = (req.query as Record<string, string>).format ?? 'clash';
+    if (!['clash', 'quantumultx', 'qx'].includes(format)) throw new AppError('CLASH_INVALID_FORMAT', 'unknown subscription format', 400);
+    return sendSubscription(req, reply, format === 'clash' ? 'clash' : 'quantumultx');
   });
+  app.get('/api/qx/subscribe', async (req, reply) => sendSubscription(req, reply, 'quantumultx'));
 });

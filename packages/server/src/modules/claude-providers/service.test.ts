@@ -41,7 +41,7 @@ describe('ClaudeProvidersService', () => {
   });
 
   it('add then list', async () => {
-    const { deps } = makeDeps();
+    const { deps, tmp } = makeDeps();
     const svc = new ClaudeProvidersService(deps);
     await svc.add({ name: 'p1', baseUrl: '', token: '', model: 'm', haikuModel: '' });
     const s = await svc.readStore();
@@ -49,6 +49,8 @@ describe('ClaudeProvidersService', () => {
     expect(s.providers[0].name).toBe('p1');
     expect(s.providers[0].baseUrl).toBe('http://localhost:4141');
     expect(s.providers[0].token).toBe('dummy');
+    expect(fs.existsSync(path.join(tmp, 'conf', 'claude', 'providers.json'))).toBe(true);
+    expect(fs.existsSync(path.join(tmp, 'data', 'claude-providers.json'))).toBe(false);
   });
 
   it('add rejects duplicates', async () => {
@@ -91,9 +93,10 @@ describe('ClaudeProvidersService', () => {
     expect(s.activeProvider).toBe('');
   });
 
-  it('migrates legacy array format', async () => {
+  it('reads array format from conf', async () => {
     const { deps, tmp } = makeDeps();
-    const p = path.join(tmp, 'data', 'claude-providers.json');
+    const p = path.join(tmp, 'conf', 'claude', 'providers.json');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(
       p,
       JSON.stringify([
@@ -105,6 +108,21 @@ describe('ClaudeProvidersService', () => {
     expect(s.providers.length).toBe(1);
     expect(s.providers[0].name).toBe('old');
     expect(s.activeProvider).toBe('');
+  });
+
+  it('ignores data providers and reads the conf store', async () => {
+    const { deps, tmp } = makeDeps();
+    const old = { activeProvider: 'old', providers: [{ name: 'old' }] };
+    fs.writeFileSync(path.join(tmp, 'data', 'claude-providers.json'), JSON.stringify(old));
+    const svc = new ClaudeProvidersService(deps);
+    expect(await svc.readStore()).toEqual({ activeProvider: '', providers: [] });
+
+    const current = { activeProvider: 'current', providers: [{ name: 'current' }] };
+    const p = path.join(tmp, 'conf', 'claude', 'providers.json');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(current));
+    expect(await svc.readStore()).toEqual(current);
+    expect(JSON.parse(fs.readFileSync(path.join(tmp, 'data', 'claude-providers.json'), 'utf-8'))).toEqual(old);
   });
 
   it('apply skips empty model mappings even when legacy model is set', async () => {
