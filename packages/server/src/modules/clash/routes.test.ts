@@ -47,10 +47,21 @@ describe('clash routes', () => {
     const r = await app.inject({
       method: 'PUT',
       url: '/api/clash/config',
-      payload: { custom_proxies: [], custom_rules: [] },
+      payload: {
+        api_key: 'keep-key',
+        clash_public_base_url: 'https://clash.example.com:20443',
+        qx_public_base_url: 'https://qx.example.com:20443',
+        custom_proxies: [], custom_rules: [],
+      },
     });
     expect(r.statusCode).toBe(200);
     expect(fs.existsSync(path.join(tmp, 'data', 'clash', 'config.json'))).toBe(true);
+    const config = await app.inject('/api/clash/config');
+    expect(config.json().data).toMatchObject({
+      api_key: 'keep-key',
+      clash_public_base_url: 'https://clash.example.com:20443',
+      qx_public_base_url: 'https://qx.example.com:20443',
+    });
   });
 
   it('PUT /api/clash/template saves and triggers manifest sync', async () => {
@@ -75,6 +86,23 @@ describe('clash routes', () => {
     expect(fs.existsSync(path.join(tmp, 'data', 'clash', 'manifest.json'))).toBe(true);
   });
 
+  it('rejects empty manual keys without changing the saved configuration', async () => {
+    const { deps, tmp } = makeDeps();
+    const app = await buildApp(deps);
+    try {
+      const config = { api_key: 'keep-key', clash_public_base_url: 'https://clash.example.com', custom_proxies: [], custom_rules: [] };
+      expect((await app.inject({ method: 'PUT', url: '/api/clash/config', payload: config })).statusCode).toBe(200);
+      for (const key of ['', '   ']) {
+        const response = await app.inject({ method: 'PUT', url: '/api/clash/config', payload: { ...config, api_key: key } });
+        expect(response.statusCode).toBe(400);
+        expect((await app.inject('/api/clash/config')).json().data).toEqual(config);
+      }
+    } finally {
+      await app.close();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('GET /api/clash/groups extracts group names from template', async () => {
     const { deps } = makeDeps();
     const app = await buildApp(deps);
@@ -97,7 +125,26 @@ describe('clash routes', () => {
   it('GET /api/clash/subscribe rejects when template empty', async () => {
     const { deps } = makeDeps();
     const app = await buildApp(deps);
-    const r = await app.inject({ method: 'GET', url: '/api/clash/subscribe' });
+    await app.inject({ method: 'PUT', url: '/api/clash/config', payload: { api_key: 'test-key' } });
+    const r = await app.inject({ method: 'GET', url: '/api/clash/subscribe?api-key=test-key' });
     expect(r.statusCode).toBe(400);
+  });
+
+  it('rejects subscriptions and static resources until a key is configured', async () => {
+    const { deps, tmp } = makeDeps();
+    const app = await buildApp(deps);
+    try {
+      for (const url of [
+        '/api/clash/subscribe', '/api/qx/subscribe',
+        '/api/clash/static/list/rules.list', '/api/clash/static/icon/icon.png',
+        '/api/static/icon/icon.png', '/api/qx/static/rules/' + '0'.repeat(24),
+      ]) {
+        expect((await app.inject(url)).statusCode).toBe(401);
+        expect((await app.inject(url + '?api-key=arbitrary')).statusCode).toBe(401);
+      }
+    } finally {
+      await app.close();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

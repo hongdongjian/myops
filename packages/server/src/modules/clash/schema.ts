@@ -24,8 +24,9 @@ export const ClashCustomRuleSchema = z.object({
 export type ClashCustomRule = z.infer<typeof ClashCustomRuleSchema>;
 
 export const ClashConfigSchema = z.object({
-  api_key: z.string().optional(),
-  public_base_url: z.string().optional(),
+  api_key: z.string().trim().min(1, '密钥不能为空').optional(),
+  clash_public_base_url: z.string().optional(),
+  qx_public_base_url: z.string().optional(),
   custom_proxies: z.array(ClashProxySchema).default([]),
   custom_rules: z.array(ClashCustomRuleSchema).default([]),
 });

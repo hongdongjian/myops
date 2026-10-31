@@ -13,6 +13,7 @@ import {
   ClashResourceGroupSchema,
   DeleteBodySchema,
   RefreshBodySchema,
+  type ClashResourceGroup,
   type ApiEnvelope,
 } from './schema.js';
 
@@ -108,10 +109,16 @@ export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
     return { success: true, data: { api_key: apiKey }, message: '订阅密钥已更新' };
   });
 
-  app.get('/api/clash/static/:group/:filename', async (req, reply) => {
-    const params = req.params as { group: string; filename: string };
-    const group = ClashResourceGroupSchema.parse(params.group);
-    const filename = params.filename;
+  const authenticatedConfig = async (req: FastifyRequest) => {
+    const cfg = await service.loadConfig();
+    const provided = (req.query as Record<string, string>)['api-key'];
+    if (!cfg.api_key || provided !== cfg.api_key) {
+      throw new AppError('CLASH_UNAUTHORIZED', 'invalid or missing api-key', 401);
+    }
+    return cfg;
+  };
+
+  const sendStatic = async (group: ClashResourceGroup, filename: string, reply: FastifyReply) => {
     const filePath = await service.resolveStaticPath(group, filename).catch(() => null);
     if (!filePath) {
       throw new AppError('CLASH_NOT_FOUND', 'resource not found', 404);
@@ -119,36 +126,35 @@ export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
     const ext = path.extname(filePath).toLowerCase();
     const mime = MIME[ext] ?? 'application/octet-stream';
     const data = await fsp.readFile(filePath);
-    reply.header('Content-Type', mime).header('Cache-Control', 'public, max-age=300').send(data);
+    return reply.header('Content-Type', mime).header('Cache-Control', 'private, max-age=300').send(data);
+  };
+  app.get('/api/clash/static/:group/:filename', async (req, reply) => {
+    await authenticatedConfig(req);
+    const params = req.params as { group: string; filename: string };
+    return sendStatic(ClashResourceGroupSchema.parse(params.group), params.filename, reply);
+  });
+  app.get('/api/static/icon/:filename', async (req, reply) => {
+    await authenticatedConfig(req);
+    return sendStatic('icon', (req.params as { filename: string }).filename, reply);
   });
 
   app.get('/api/clash/quantumultx/report', async (): Promise<ApiEnvelope> => {
     const cfg = await service.loadConfig();
-    const result = await quantumultx.build(cfg.public_base_url?.trim().replace(/\/+$/, '') || 'http://127.0.0.1:3333');
+    const result = await quantumultx.build(cfg.qx_public_base_url?.trim().replace(/\/+$/, '') || 'http://127.0.0.1:3333');
     return { success: true, data: { stats: result.stats, issues: result.issues } };
   });
 
-  const subscriptionConfig = async (req: FastifyRequest) => {
-    const cfg = await service.loadConfig();
-    if (cfg.api_key) {
-      const provided = (req.query as Record<string, string>)['api-key'];
-      if (provided !== cfg.api_key) {
-        throw new AppError('CLASH_UNAUTHORIZED', 'invalid or missing api-key', 401);
-      }
-    }
-    return cfg;
-  };
-  app.get('/api/qx/rules/:id', async (req, reply) => {
-    await subscriptionConfig(req);
+  app.get('/api/qx/static/rules/:id', async (req, reply) => {
+    await authenticatedConfig(req);
     const id = (req.params as { id: string }).id;
     if (!/^[a-f0-9]{24}$/.test(id)) throw new AppError('QX_RULE_NOT_FOUND', '规则资源不存在', 404);
     const content = await quantumultx.buildRuleResource(id);
     return reply.header('Content-Type', 'text/plain; charset=utf-8').send(content);
   });
   const sendSubscription = async (req: FastifyRequest, reply: FastifyReply, format: 'clash' | 'quantumultx') => {
-    const cfg = await subscriptionConfig(req);
-    const configured = cfg.public_base_url?.trim().replace(/\/+$/, '');
-    const baseUrl = configured || 'http://127.0.0.1:3333';
+    const cfg = await authenticatedConfig(req);
+    const configured = format === 'clash' ? cfg.clash_public_base_url : cfg.qx_public_base_url;
+    const baseUrl = configured?.trim().replace(/\/+$/, '') || 'http://127.0.0.1:3333';
     if (format === 'quantumultx') {
       const result = await quantumultx.build(baseUrl);
       return reply

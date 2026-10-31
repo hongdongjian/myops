@@ -37,9 +37,15 @@ interface ClashCustomRule {
 
 interface ClashConfig {
   api_key?: string;
-  public_base_url?: string;
+  clash_public_base_url?: string;
+  qx_public_base_url?: string;
   custom_proxies: ClashProxy[];
   custom_rules: ClashCustomRule[];
+}
+
+interface PublicBaseUrls {
+  clash: string;
+  qx: string;
 }
 
 interface ClashResource {
@@ -143,22 +149,38 @@ export function ClashTab() {
 
   const rotateKey = useMutation({
     mutationFn: () => apiPost('/api/clash/subscribe/rotate-key'),
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success('订阅密钥已轮换');
-      qc.invalidateQueries({ queryKey: ['clash', 'config'] });
+      await qc.invalidateQueries({ queryKey: ['clash', 'config'] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const saveBaseUrl = useMutation({
-    mutationFn: (base: string) => {
+  const saveKey = useMutation({
+    mutationFn: (apiKey: string) => {
       const current = cfg ?? { custom_proxies: [], custom_rules: [] };
-      const next: ClashConfig = { ...current, public_base_url: base || undefined };
+      return apiPut('/api/clash/config', { ...current, api_key: apiKey });
+    },
+    onSuccess: async () => {
+      toast.success('订阅密钥已更新');
+      await qc.invalidateQueries({ queryKey: ['clash', 'config'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const saveBaseUrls = useMutation({
+    mutationFn: (bases: PublicBaseUrls) => {
+      const current = cfg ?? { custom_proxies: [], custom_rules: [] };
+      const next: ClashConfig = {
+        ...current,
+        clash_public_base_url: bases.clash || undefined,
+        qx_public_base_url: bases.qx || undefined,
+      };
       return apiPut('/api/clash/config', next);
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success('公网地址已保存');
-      qc.invalidateQueries({ queryKey: ['clash', 'config'] });
+      await qc.invalidateQueries({ queryKey: ['clash', 'config'] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -222,13 +244,18 @@ export function ClashTab() {
     toast.success(group ? `${group} 已刷新` : '全部资源已刷新');
   }
 
-  const subscribeUrl = useMemo(() => {
+  const subscribeUrls = useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3333';
     const key = cfg?.api_key;
-    return key ? `${origin}/api/clash/subscribe?api-key=${encodeURIComponent(key)}` : `${origin}/api/clash/subscribe`;
-  }, [cfg?.api_key]);
+    const query = key ? `?api-key=${encodeURIComponent(key)}` : '';
+    const clashBase = cfg?.clash_public_base_url?.trim().replace(/\/+$/, '') || origin;
+    const qxBase = cfg?.qx_public_base_url?.trim().replace(/\/+$/, '') || origin;
+    return {
+      clash: `${clashBase}/api/clash/subscribe${query}`,
+      qx: `${qxBase}/api/qx/subscribe${query}`,
+    };
+  }, [cfg?.api_key, cfg?.clash_public_base_url, cfg?.qx_public_base_url]);
 
-  const qxSubscribeUrl = subscribeUrl.replace('/api/clash/subscribe', '/api/qx/subscribe');
   const anyRefreshing = refreshing.size > 0;
 
   const handleProxySubmit = (p: ClashProxy) => {
@@ -281,14 +308,17 @@ export function ClashTab() {
   return (
     <div className="space-y-4">
       <SubscribeCard
-        subscribeUrl={subscribeUrl}
-        qxSubscribeUrl={qxSubscribeUrl}
+        subscribeUrl={subscribeUrls.clash}
+        qxSubscribeUrl={subscribeUrls.qx}
         hasKey={!!cfg?.api_key}
         onRotate={() => rotateKey.mutate()}
         rotating={rotateKey.isPending}
-        baseUrl={cfg?.public_base_url ?? ''}
-        onSaveBaseUrl={(b) => saveBaseUrl.mutate(b)}
-        savingBaseUrl={saveBaseUrl.isPending}
+        onSaveKey={(key) => saveKey.mutateAsync(key)}
+        savingKey={saveKey.isPending || saveBaseUrls.isPending || !cfg}
+        clashBaseUrl={cfg?.clash_public_base_url ?? ''}
+        qxBaseUrl={cfg?.qx_public_base_url ?? ''}
+        onSaveBaseUrls={(bases) => saveBaseUrls.mutateAsync(bases)}
+        savingBaseUrls={saveBaseUrls.isPending || saveKey.isPending || rotateKey.isPending || !cfg}
       />
 
       <Card>
@@ -427,6 +457,7 @@ export function ClashTab() {
           <ResourceGroup
             key={g}
             group={g}
+            apiKey={cfg?.api_key}
             entries={manifestQuery.data?.[g] ?? []}
             refreshing={refreshing}
             anyRefreshing={anyRefreshing}
@@ -463,22 +494,29 @@ function SubscribeCard({
   hasKey,
   onRotate,
   rotating,
-  baseUrl,
-  onSaveBaseUrl,
-  savingBaseUrl,
+  onSaveKey,
+  savingKey,
+  clashBaseUrl,
+  qxBaseUrl,
+  onSaveBaseUrls,
+  savingBaseUrls,
 }: {
   subscribeUrl: string;
   qxSubscribeUrl: string;
   hasKey: boolean;
   onRotate: () => void;
   rotating: boolean;
-  baseUrl: string;
-  onSaveBaseUrl: (b: string) => void;
-  savingBaseUrl: boolean;
+  onSaveKey: (key: string) => Promise<unknown>;
+  savingKey: boolean;
+  clashBaseUrl: string;
+  qxBaseUrl: string;
+  onSaveBaseUrls: (bases: PublicBaseUrls) => Promise<unknown>;
+  savingBaseUrls: boolean;
 }) {
   const toast = useToast();
-  const [baseDraft, setBaseDraft] = useState<string | null>(null);
-  const baseValue = baseDraft ?? baseUrl;
+  const [keyDraft, setKeyDraft] = useState('');
+  const [baseDraft, setBaseDraft] = useState<PublicBaseUrls | null>(null);
+  const baseValues = baseDraft ?? { clash: clashBaseUrl, qx: qxBaseUrl };
   return (
     <Card>
       <CardHeader>
@@ -504,41 +542,82 @@ function SubscribeCard({
         ))}
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs text-muted-foreground">两种订阅共用 Clash 配置和密钥。QX 不包含重写、脚本或 MITM。</p>
-          <Button size="sm" variant="outline" onClick={onRotate} disabled={rotating}>
+          <Button size="sm" variant="outline" onClick={onRotate} disabled={rotating || savingKey}>
             {hasKey ? '轮换密钥' : '生成密钥'}
           </Button>
         </div>
-        <div className="flex items-center gap-2">
-          <Label className="shrink-0 text-xs text-muted-foreground">公网地址</Label>
+        <form
+          className="flex flex-col gap-2 sm:flex-row sm:items-center"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const key = keyDraft.trim();
+            if (!key || savingKey || rotating) return;
+            try {
+              await onSaveKey(key);
+              setKeyDraft('');
+            } catch {
+              // The mutation displays the error; preserve the draft for retry.
+            }
+          }}
+        >
+          <Label htmlFor="subscription-api-key" className="shrink-0 text-xs text-muted-foreground sm:w-36">手动设置密钥</Label>
           <Input
-            value={baseValue}
-            onChange={(e) => setBaseDraft(e.target.value)}
-            placeholder="http://127.0.0.1:3333 (留空使用此默认)"
-            className="font-mono text-xs"
+            id="subscription-api-key"
+            type="password"
+            autoComplete="new-password"
+            placeholder="输入新密钥"
+            value={keyDraft}
+            onChange={(event) => setKeyDraft(event.target.value)}
+            disabled={savingKey || rotating}
+            className="min-w-0 font-mono text-xs"
           />
+          <Button type="submit" size="sm" variant="outline" disabled={!keyDraft.trim() || savingKey || rotating}>保存密钥</Button>
+        </form>
+        <p className="text-xs text-muted-foreground">手动修改或轮换密钥后，请将新的订阅地址更新到客户端。</p>
+        {([
+          { key: 'clash', label: 'Clash 公网地址' },
+          { key: 'qx', label: 'Quantumult X 公网地址' },
+        ] as const).map(entry => (
+          <div key={entry.key} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Label htmlFor={`${entry.key}-public-base-url`} className="shrink-0 text-xs text-muted-foreground sm:w-36">{entry.label}</Label>
+            <Input
+              id={`${entry.key}-public-base-url`}
+              value={baseValues[entry.key]}
+              onChange={(e) => setBaseDraft({ ...baseValues, [entry.key]: e.target.value })}
+              placeholder="http://127.0.0.1:3333"
+              className="min-w-0 font-mono text-xs"
+            />
+          </div>
+        ))}
+        <div className="flex justify-end">
           <Button
             size="sm"
             variant="outline"
-            disabled={savingBaseUrl || baseDraft === null}
-            onClick={() => {
-              onSaveBaseUrl(baseValue.trim());
-              setBaseDraft(null);
+            disabled={savingBaseUrls || baseDraft === null}
+            onClick={async () => {
+              try {
+                await onSaveBaseUrls({ clash: baseValues.clash.trim(), qx: baseValues.qx.trim() });
+                setBaseDraft(null);
+              } catch {
+                // The mutation displays the error; preserve the draft for retry.
+              }
             }}
           >
-            保存
+            保存公网地址
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          订阅地址为本服务访问入口；公网地址用于订阅文件内 /api/clash/static/ 资源 URL 的替换（不填默认 http://127.0.0.1:3333）。
+          分别填写 Clash 和 Quantumult X 客户端可访问的服务地址；修改后请在客户端更新订阅。
         </p>
       </CardContent>
     </Card>
   );
 }
 
-function LocalLink({ group, filename, downloaded }: { group: ClashResourceGroup; filename: string; downloaded: boolean }) {
+function LocalLink({ group, filename, downloaded, apiKey }: { group: ClashResourceGroup; filename: string; downloaded: boolean; apiKey?: string }) {
   const toast = useToast();
-  const localPath = `/api/clash/static/${group}/${encodeURIComponent(filename)}`;
+  const prefix = group === 'icon' ? '/api/static/icon/' : '/api/clash/static/list/';
+  const localPath = prefix + encodeURIComponent(filename) + (apiKey ? '?api-key=' + encodeURIComponent(apiKey) : '');
   const fullUrl = typeof window !== 'undefined' ? `${window.location.origin}${localPath}` : localPath;
   if (!downloaded) {
     return <div className="text-[10px] text-muted-foreground/70">本地: 未下载</div>;
@@ -567,6 +646,7 @@ function LocalLink({ group, filename, downloaded }: { group: ClashResourceGroup;
 
 function ResourceGroup({
   group,
+  apiKey,
   entries,
   refreshing,
   anyRefreshing,
@@ -578,6 +658,7 @@ function ResourceGroup({
   removing,
 }: {
   group: ClashResourceGroup;
+  apiKey?: string;
   entries: ClashResource[];
   refreshing: Set<string>;
   anyRefreshing: boolean;
@@ -648,7 +729,7 @@ function ResourceGroup({
                       <span className="min-w-0 flex-1 truncate font-mono">{e.filename}</span>
                     </div>
                     <div className="truncate text-muted-foreground" title={e.url}>源: {e.url}</div>
-                    <LocalLink group={group} filename={e.filename} downloaded={e.source === 'local' || !!e.updatedAt} />
+                    <LocalLink group={group} filename={e.filename} downloaded={e.source === 'local' || !!e.updatedAt} apiKey={apiKey} />
                     <div className="text-[10px] text-muted-foreground/80">
                       {fmtBytes(e.size)} · {fmtTime(e.updatedAt)}
                       {e.error && <span className="ml-2 text-destructive">{e.error}</span>}

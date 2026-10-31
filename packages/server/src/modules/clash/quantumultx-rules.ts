@@ -185,7 +185,7 @@ export function convertClashRules(
     if (!converted.available) continue;
     resources.push({ id: spec.id, name: spec.name, content: converted.content, rules: converted.rules });
     remoteCount += converted.rules;
-    const url = sources.ruleResourceUrl?.(spec.id) ?? '/api/qx/rules/' + spec.id;
+    const url = sources.ruleResourceUrl?.(spec.id) ?? '/api/qx/static/rules/' + spec.id;
     remoteRules.push(url + ', tag=' + spec.name + ', force-policy=' + writer.target(spec.target)
       + ', update-interval=' + spec.interval + ', opt-parser=false, inserted-resource=true, enabled=true');
   }

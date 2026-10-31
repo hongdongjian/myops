@@ -53,11 +53,20 @@ npm run uninstall   # 对应 install 安装
 - Clash：`/api/clash/subscribe?api-key=<Clash密钥>`
 - Quantumult X：`/api/qx/subscribe?api-key=<Clash密钥>`
 
+Clash 与 Quantumult X 分别使用 `clash_public_base_url` 和 `qx_public_base_url` 生成订阅及资源链接，
+两项地址与密钥保存在本机 `~/.myops/data/clash/config.json`；旧的 `public_base_url` 作为读取回退。
+Clash 规则使用 `/api/clash/static/list/<filename>`，QX 规则使用 `/api/qx/static/rules/<id>`，
+共用图标使用 `/api/static/icon/<filename>`。订阅和上述资源统一校验 `api-key`，未配置、缺少或使用错误密钥均返回 401。
+生成订阅及页面本地资源链接时自动附加当前密钥，静态文件使用私有缓存。
+页面支持手动设置密钥和随机轮换；手动密钥去除首尾空白且不能为空。修改后需将新订阅地址更新到客户端。
+按域名代理时，各自只开放订阅、对应的静态资源前缀和公共静态资源前缀，其他路径返回 403。
+修改公网地址或资源路径后，需要在客户端更新订阅。
+
 两种订阅共用 Clash 密钥。Clash 页面中的「检查转换」显示已转换数量和不支持的项目。
 QX 输出包含节点、策略和分流，直接复用 Clash 的规则缓存，并展开机场节点与动态分组。
 策略组展示顺序与 YAML 模板一致，组间引用不改变排列。
 单节点测速组转换为直接引用节点的固定选择组，多节点测速组保留自动测速。
-Clash 规则集按原分类和引用顺序输出为 QX 独立规则资源，由 Myops 的 `/api/qx/rules/<id>?api-key=<Clash密钥>` 提供。
+Clash 规则集按原分类和引用顺序输出为 QX 独立规则资源，由 Myops 的 `/api/qx/static/rules/<id>?api-key=<Clash密钥>` 提供。
 主配置通过 `filter_remote` 引用资源，保留原名称和策略偏好；`filter_local` 仅保留末尾普通规则和 FINAL。
 若普通规则与规则集交错，中间普通规则按原位置分段为“YAML 规则”资源，避免改变顺序。
 单独刷新资源会读取当前已保存规则及 Clash 规则缓存，不加载机场节点；缓存缺失时才按需获取规则源。

@@ -81,7 +81,7 @@ describe('Clash QX subscriptions', () => {
     noKey.search = '';
     expect((await app.inject(requestPath(noKey))).statusCode).toBe(401);
     expect((await app.inject(noKey.pathname + '?api-key=wrong')).statusCode).toBe(401);
-    expect((await app.inject('/api/qx/rules/' + '0'.repeat(24) + '?api-key=clash-secret')).statusCode).toBe(404);
+    expect((await app.inject('/api/qx/static/rules/' + '0'.repeat(24) + '?api-key=clash-secret')).statusCode).toBe(404);
     expect(qx.body).toContain('static=Region, HK-1\n');
     expect(qx.body.split('[mitm]\n')[1]!.trim()).toBe('');
     const alias = await app.inject('/api/clash/subscribe?format=quantumultx&api-key=clash-secret');
@@ -108,6 +108,90 @@ describe('Clash QX subscriptions', () => {
     }
   });
 
+  it('keeps rules on their own public origins and serves shared icons from both subscriptions', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(YAML.stringify({ proxies: [node('HK-1')] }))));
+    const { app, clash } = await fixture();
+    const config = {
+      ...await clash.loadConfig(),
+      api_key: 'shared&key/#?%',
+      clash_public_base_url: 'https://clash.example.com:20443/',
+      qx_public_base_url: 'https://qx.example.com:20443/',
+    };
+    const query = '?api-key=' + encodeURIComponent(config.api_key);
+    await clash.saveConfig(config);
+    await clash.writeCustomRuleFiles(config);
+    const template = YAML.parse(await clash.loadTemplate());
+    template['proxy-groups'][0].icon = 'https://icons.example.com/YouTube.png';
+    await clash.saveTemplate(YAML.stringify(template));
+    const manifest = await clash.loadManifest();
+    manifest.icon.push({ url: 'https://icons.example.com/YouTube.png', filename: 'You Tube.png', source: 'remote' });
+    await clash.saveManifest(manifest);
+    await fsp.mkdir(clash.groupDir('icon'), { recursive: true });
+    const icon = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5i8AAAAASUVORK5CYII=', 'base64');
+    await fsp.writeFile(path.join(clash.groupDir('icon'), 'You Tube.png'), icon);
+
+    const qx = await app.inject('/api/qx/subscribe' + query);
+    expect(qx.statusCode).toBe(200);
+    const resources = references(qx.body);
+    expect(resources).toHaveLength(2);
+    for (const { url } of resources) {
+      expect(url.origin).toBe('https://qx.example.com:20443');
+      expect(url.pathname).toMatch(/^\/api\/qx\/static\/rules\/[a-f0-9]{24}$/);
+      expect(url.searchParams.get('api-key')).toBe(config.api_key);
+      expect((await app.inject(requestPath(url))).statusCode).toBe(200);
+    }
+    expect(qx.body).toContain('img-url=https://qx.example.com:20443/api/static/icon/You%20Tube.png' + query);
+    expect(qx.body).not.toContain('/api/clash/');
+    expect(qx.body).not.toContain('/api/qx/rules/');
+
+    const clashResponse = await app.inject('/api/clash/subscribe' + query);
+    expect(clashResponse.statusCode).toBe(200);
+    const doc = YAML.parse(clashResponse.body);
+    expect(doc['proxy-groups'][0].icon).toBe('https://clash.example.com:20443/api/static/icon/You%20Tube.png' + query);
+    const staticPaths = ['/api/static/icon/You%20Tube.png', '/api/clash/static/icon/You%20Tube.png'];
+    for (const provider of Object.values(doc['rule-providers']) as { url: string }[]) {
+      const url = new URL(provider.url);
+      expect(url.origin).toBe('https://clash.example.com:20443');
+      expect(url.pathname).toMatch(/^\/api\/clash\/static\/list\//);
+      expect(url.searchParams.get('api-key')).toBe(config.api_key);
+      expect((await app.inject(requestPath(url))).statusCode).toBe(200);
+      staticPaths.push(url.pathname);
+    }
+    for (const staticPath of staticPaths) {
+      expect((await app.inject(staticPath)).statusCode).toBe(401);
+      expect((await app.inject(staticPath + '?api-key=wrong')).statusCode).toBe(401);
+      expect((await app.inject(staticPath + query)).statusCode).toBe(200);
+    }
+    const image = await app.inject('/api/static/icon/You%20Tube.png' + query);
+    expect(image.statusCode).toBe(200);
+    expect(image.headers['content-type']).toBe('image/png');
+    expect(image.headers['cache-control']).toBe('private, max-age=300');
+    expect(image.rawPayload).toEqual(icon);
+    expect((await app.inject('/api/static/icon/missing.png' + query)).statusCode).toBe(404);
+    expect((await app.inject('/api/static/list/remote.list')).statusCode).toBe(404);
+    expect((await app.inject('/api/qx/rules/' + resources[0]!.url.pathname.split('/').pop() + '?api-key=clash-secret')).statusCode).toBe(404);
+    const manualKey = 'manual&secret/?#';
+    const manualQuery = '?api-key=' + encodeURIComponent(manualKey);
+    const saved = await app.inject({
+      method: 'PUT', url: '/api/clash/config',
+      payload: { ...config, api_key: ' ' + manualKey + ' ' },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect((await app.inject('/api/clash/config')).json().data).toEqual({ ...config, api_key: manualKey });
+    for (const staticPath of staticPaths) {
+      expect((await app.inject(staticPath + query)).statusCode).toBe(401);
+      expect((await app.inject(staticPath + manualQuery)).statusCode).toBe(200);
+    }
+    expect((await app.inject('/api/qx/subscribe' + query)).statusCode).toBe(401);
+    expect((await app.inject('/api/clash/subscribe' + query)).statusCode).toBe(401);
+    const updatedQx = await app.inject('/api/qx/subscribe' + manualQuery);
+    expect(updatedQx.statusCode).toBe(200);
+    expect(references(updatedQx.body).every(resource => resource.url.searchParams.get('api-key') === manualKey)).toBe(true);
+    const updatedClash = await app.inject('/api/clash/subscribe' + manualQuery);
+    expect(updatedClash.statusCode).toBe(200);
+    expect(new URL(YAML.parse(updatedClash.body)['proxy-groups'][0].icon).searchParams.get('api-key')).toBe(manualKey);
+  });
+
   it('refreshes individual resources from current saved rules without fetching airport nodes', async () => {
     const fetchStub = vi.fn(async () => new Response(YAML.stringify({ proxies: [node('HK-1')] })));
     vi.stubGlobal('fetch', fetchStub);
@@ -126,12 +210,15 @@ describe('Clash QX subscriptions', () => {
     expect(fetchStub).not.toHaveBeenCalled();
     await clash.saveConfig({ ...config, custom_rules: [], api_key: 'rotated-secret' });
     expect((await app.inject(requestPath(resources[0]!.url))).statusCode).toBe(401);
+    expect((await app.inject(requestPath(resources[1]!.url))).statusCode).toBe(401);
     const removed = new URL(resources[0]!.url);
     removed.searchParams.set('api-key', 'rotated-secret');
     expect((await app.inject(requestPath(removed))).statusCode).toBe(404);
     const current = new URL(resources[1]!.url);
     current.searchParams.set('api-key', 'rotated-secret');
     expect((await app.inject(requestPath(current))).statusCode).toBe(200);
+    expect((await app.inject('/api/qx/subscribe?api-key=clash-secret')).statusCode).toBe(401);
+    expect((await app.inject('/api/clash/subscribe?api-key=clash-secret')).statusCode).toBe(401);
     expect(fetchStub).not.toHaveBeenCalled();
   });
 

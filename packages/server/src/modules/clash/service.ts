@@ -124,12 +124,13 @@ export class ClashService {
       }
     }
     const merged = machine ?? legacyData ?? {};
+    const legacyBaseUrl = typeof merged.public_base_url === 'string' ? merged.public_base_url : undefined;
     return {
       api_key: typeof (merged as any).api_key === 'string' ? (merged as any).api_key : undefined,
-      public_base_url:
-        typeof (merged as any).public_base_url === 'string'
-          ? (merged as any).public_base_url
-          : undefined,
+      clash_public_base_url:
+        typeof merged.clash_public_base_url === 'string' ? merged.clash_public_base_url : legacyBaseUrl,
+      qx_public_base_url:
+        typeof merged.qx_public_base_url === 'string' ? merged.qx_public_base_url : legacyBaseUrl,
       custom_proxies: Array.isArray((custom as any)?.custom_proxies)
         ? ((custom as any).custom_proxies as ClashProxy[])
         : Array.isArray((merged as any).custom_proxies)
@@ -173,7 +174,8 @@ export class ClashService {
   async saveConfig(cfg: ClashConfig): Promise<void> {
     const machine: Record<string, unknown> = {};
     if (cfg.api_key) machine.api_key = cfg.api_key;
-    if (cfg.public_base_url) machine.public_base_url = cfg.public_base_url;
+    if (cfg.clash_public_base_url) machine.clash_public_base_url = cfg.clash_public_base_url;
+    if (cfg.qx_public_base_url) machine.qx_public_base_url = cfg.qx_public_base_url;
     await this.writeJsonFile(this.configPath(), machine);
     await this.writeJsonFile(this.customPath(), {
       custom_proxies: cfg.custom_proxies,
@@ -591,7 +593,7 @@ export class ClashService {
   /**
    * Build subscribe yaml: parse template, inject custom_proxies, inject custom_rules as
    * rule-providers + prepend RULE-SET lines, and replace remote resource URLs with local
-   * /api/clash/static/<group>/<filename>.
+   * /api/clash/static/list/<filename> or /api/static/icon/<filename>.
    */
   async buildSubscribe(baseUrl: string): Promise<string> {
     const text = await this.loadTemplate();
@@ -611,12 +613,14 @@ export function buildClashSubscribe(
   baseUrl: string,
 ): string {
   const base = baseUrl.replace(/\/+$/, '');
+  const query = cfg.api_key ? '?api-key=' + encodeURIComponent(cfg.api_key) : '';
   let out = YAML.stringify(buildClashDocument(templateText, cfg, baseUrl));
   const mapping = new Map<string, string>();
   for (const group of CLASH_GROUPS) {
     for (const entry of manifest[group]) {
       if (entry.source === 'local') continue;
-      mapping.set(entry.url, base + '/api/clash/static/' + group + '/' + encodeURIComponent(entry.filename));
+      const prefix = group === 'icon' ? '/api/static/icon/' : '/api/clash/static/list/';
+      mapping.set(entry.url, base + prefix + encodeURIComponent(entry.filename) + query);
     }
   }
   const sortedUrls = Array.from(mapping.keys()).sort((a, b) => b.length - a.length);
@@ -630,6 +634,7 @@ export function buildClashDocument(
   baseUrl: string,
 ): Record<string, unknown> {
   const base = baseUrl.replace(/\/+$/, '');
+  const query = cfg.api_key ? '?api-key=' + encodeURIComponent(cfg.api_key) : '';
   let doc: Record<string, unknown>;
   try {
     doc = (YAML.parse(templateText) ?? {}) as Record<string, unknown>;
@@ -653,7 +658,7 @@ export function buildClashDocument(
         behavior: rule.behavior,
         format: 'text',
         interval: 86400,
-        url: `${base}/api/clash/static/list/custom-${rule.id}.list`,
+        url: `${base}/api/clash/static/list/custom-${encodeURIComponent(rule.id)}.list${query}`,
       };
     }
     doc['rule-providers'] = providers;

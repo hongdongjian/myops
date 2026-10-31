@@ -68,13 +68,35 @@ describe('clash service', () => {
     const svc = new ClashService(deps);
     await svc.saveConfig({
       api_key: 'k',
+      clash_public_base_url: 'https://clash.example.com:20443',
+      qx_public_base_url: 'https://qx.example.com:20443',
       custom_proxies: [{ name: 'X', type: 'ss' } as any],
       custom_rules: [],
     });
     const back = await svc.loadConfig();
     expect(back.api_key).toBe('k');
+    expect(back.clash_public_base_url).toBe('https://clash.example.com:20443');
+    expect(back.qx_public_base_url).toBe('https://qx.example.com:20443');
     expect(back.custom_proxies).toHaveLength(1);
     expect(fs.existsSync(path.join(tmp, 'data', 'clash', 'config.json'))).toBe(true);
+  });
+
+  it('reads the legacy public address and migrates it when saving separate addresses', async () => {
+    const { deps } = makeDeps();
+    const svc = new ClashService(deps);
+    fs.mkdirSync(svc.dataDir(), { recursive: true });
+    fs.writeFileSync(svc.configPath(), JSON.stringify({ api_key: 'keep-key', public_base_url: 'https://legacy.example.com' }));
+    const config = await svc.loadConfig();
+    expect(config.clash_public_base_url).toBe('https://legacy.example.com');
+    expect(config.qx_public_base_url).toBe('https://legacy.example.com');
+    await svc.saveConfig({ ...config, clash_public_base_url: 'https://clash.example.com', qx_public_base_url: 'https://qx.example.com' });
+    expect(JSON.parse(fs.readFileSync(svc.configPath(), 'utf-8'))).toEqual({
+      api_key: 'keep-key', clash_public_base_url: 'https://clash.example.com', qx_public_base_url: 'https://qx.example.com',
+    });
+    await svc.saveConfig({ ...config, clash_public_base_url: undefined, qx_public_base_url: undefined });
+    const cleared = await svc.loadConfig();
+    expect(cleared.clash_public_base_url).toBeUndefined();
+    expect(cleared.qx_public_base_url).toBeUndefined();
   });
 
   it('saveTemplate + loadTemplate roundtrip', async () => {
@@ -234,7 +256,7 @@ describe('buildClashSubscribe', () => {
       const out = YAML.parse(buildClashSubscribe(
         YAML.stringify(template),
         {
-          public_base_url: baseUrl,
+          clash_public_base_url: baseUrl,
           custom_proxies: [],
           custom_rules: [
             { id: 'abc', name: 'MyRules', target_group: '香港节点', behavior: 'classical', rules: [], enabled: true },
@@ -257,6 +279,8 @@ describe('buildClashSubscribe', () => {
   );
 
   it('prepends custom proxies and rules; rewrites remote URLs to local static paths', () => {
+    const apiKey = 'key&=/?#';
+    const query = '?api-key=' + encodeURIComponent(apiKey);
     const manifest = emptyManifest();
     manifest.list.push({
       url: 'https://example.com/lists/direct.list',
@@ -271,6 +295,7 @@ describe('buildClashSubscribe', () => {
     const out = buildClashSubscribe(
       sampleYaml,
       {
+        api_key: apiKey,
         custom_proxies: [{ name: '日本自建节点', type: 'vmess' } as any],
         custom_rules: [
           { id: 'abc', name: 'MyRules', target_group: '香港节点', behavior: 'classical', rules: [], enabled: true },
@@ -286,10 +311,11 @@ describe('buildClashSubscribe', () => {
     expect(ruleSetIdx).toBeGreaterThan(-1);
     expect(ruleSetIdx).toBeLessThan(upstreamRuleIdx);
     // Custom rule-provider added pointing to local static URL
-    expect(out).toContain('http://my.host:3333/api/clash/static/list/custom-abc.list');
+    expect(out).toContain('http://my.host:3333/api/clash/static/list/custom-abc.list' + query);
     // Remote URLs rewritten
-    expect(out).toContain('http://my.host:3333/api/clash/static/list/direct.list');
-    expect(out).toContain('http://my.host:3333/api/clash/static/icon/hk.png');
+    expect(out).toContain('http://my.host:3333/api/clash/static/list/direct.list' + query);
+    expect(out).toContain('http://my.host:3333/api/static/icon/hk.png' + query);
+    expect(YAML.parse(out)['proxy-providers'].Sub.url).toBe('https://example.com/sub.yaml');
     expect(out).not.toContain('https://example.com/lists/direct.list');
   });
 

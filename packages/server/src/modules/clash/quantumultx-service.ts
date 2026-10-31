@@ -130,10 +130,10 @@ export class ClashQuantumultXService {
     const issues: ConversionIssue[] = [];
     const sources: QxSources = { nodes: {}, rules: {}, issues, iconUrls: new Map() };
     const base = baseUrl.replace(/\/+$/, '');
-    sources.ruleResourceUrl = id => base + '/api/qx/rules/' + id
-      + (config.api_key ? '?api-key=' + encodeURIComponent(config.api_key) : '');
+    const query = config.api_key ? '?api-key=' + encodeURIComponent(config.api_key) : '';
+    sources.ruleResourceUrl = id => base + '/api/qx/static/rules/' + id + query;
     for (const resource of manifest.icon) {
-      sources.iconUrls!.set(resource.url, base + '/api/clash/static/icon/' + encodeURIComponent(resource.filename));
+      sources.iconUrls!.set(resource.url, base + '/api/static/icon/' + encodeURIComponent(resource.filename) + query);
     }
     const nodeProviders = Object.entries(doc['proxy-providers'] ?? {}) as [string, ClashDocument][];
     for (const [name] of nodeProviders) sources.nodes[name] = [];
