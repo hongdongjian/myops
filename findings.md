@@ -204,3 +204,11 @@
 - 下载完成后先验证非空、非 HTML 及对应 text/YAML 格式，再写入临时文件并 rename；失败保留旧文件、大小和成功更新时间，记录错误供后续重试。
 - 实际启动已自动刷新 Direct.list；模板/自定义配置/密钥/机场缓存/图标/本地规则的前后哈希一致。
 - 原两条 Cron 已备份并移除；QX 客户端资源仍按自身周期拉取 Myops，服务端刷新不向客户端推送。
+
+## 2026-11-03 自定义规则派生文件缺失
+- 远程 claude 规则接口实际返回 Myops 的 resource not found；Proxy/Reject 当前 HTTP/1.1、HTTP/2 均下载完整，是另一个暂未复现的传输问题。
+- writeCustomRuleFiles 仅由配置 PUT 调用；syncManifest 只登记 local 资源，refreshDueRules/refreshResources 跳过 local，因此同步 conf 或重启不能补齐缺失文件。
+- ConfigSyncService 由 CLI 使用，直接 git pull 也可更新 conf，因此修复应放在 Clash 自身的同步和读取流程，避免只覆盖某一种同步入口。
+- 修复后自定义文件在清单同步时生成、订阅生成前同步、静态资源请求时校准；保持原有密钥校验及未知/已删除资源 404。
+- 原有 QX 资源失败测试存在启动异步刷新未结束就删除文件的竞态，已通过等待实际启动刷新 Promise 消除，未放宽请求次数断言。
+- 76 项相关测试及完整构建通过，临时部署逐步复现的原 404 均已变为 200；conf 仍是唯一自定义规则来源，data 内文件为自动派生产物。

@@ -247,9 +247,10 @@ export class ClashService {
   async syncManifest(): Promise<ClashManifest> {
     const text = await this.loadTemplate();
     const parsed = parseClashYaml(text);
-    const cfg = await this.loadConfig();
     const release = await this.mu.acquire();
     try {
+      const cfg = await this.loadConfig();
+      await this.writeCustomRuleFiles(cfg);
       const current = await this.loadManifest();
       const next: ClashManifest = emptyManifest();
 
@@ -555,6 +556,11 @@ export class ClashService {
 
   async resolveStaticPath(group: ClashResourceGroup, filename: string): Promise<string> {
     const safe = path.basename(filename);
+    if (group === 'list' && safe.startsWith('custom-') && safe.endsWith('.list')) {
+      await this.mu.runExclusive(async () => {
+        await this.writeCustomRuleFiles(await this.loadConfig());
+      });
+    }
     const full = path.join(this.groupDir(group), safe);
     await fsp.access(full);
     return full;
@@ -574,7 +580,18 @@ export class ClashService {
         return trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('//');
       });
       const content = validRules.join('\n') + (validRules.length ? '\n' : '');
-      await fsp.writeFile(dest, content);
+      try {
+        if (await fsp.readFile(dest, 'utf-8') === content) continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      const temporary = dest + '.' + crypto.randomUUID() + '.tmp';
+      try {
+        await fsp.writeFile(temporary, content);
+        await fsp.rename(temporary, dest);
+      } finally {
+        await fsp.unlink(temporary).catch(() => undefined);
+      }
     }
     const dir = this.groupDir('list');
     let files: string[];
@@ -600,8 +617,8 @@ export class ClashService {
     if (!text.trim()) {
       throw new AppError('CLASH_NO_TEMPLATE', '请先在 Clash 管理中保存 YAML 模板', 400);
     }
+    const manifest = await this.syncManifest();
     const cfg = await this.loadConfig();
-    const manifest = await this.loadManifest();
     return buildClashSubscribe(text, cfg, manifest, baseUrl);
   }
 }

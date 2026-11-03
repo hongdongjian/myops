@@ -48,6 +48,14 @@ async function fixture() {
   onTestFinished(async () => { await app.close(); await fsp.rm(tmp, { recursive: true, force: true }); });
   await app.register(errorHandlerPlugin);
   await app.register(clashModule, { deps: { paths } as Deps });
+  // Finish the initial background refresh before tests mutate cached resources.
+  const startupRefresh = vi.spyOn(ClashService.prototype, 'refreshDueRules');
+  try {
+    await app.ready();
+    await Promise.all(startupRefresh.mock.results.map(result => result.value));
+  } finally {
+    startupRefresh.mockRestore();
+  }
   return { tmp, paths, clash, app, converter: new ClashQuantumultXService(clash, paths) };
 }
 

@@ -53,7 +53,6 @@ export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
   app.put('/api/clash/config', async (req): Promise<ApiEnvelope> => {
     const cfg = ClashConfigSchema.parse(req.body);
     await service.saveConfig(cfg);
-    await service.writeCustomRuleFiles(cfg);
     await service.syncManifest();
     return { success: true, message: '配置已保存' };
   });
@@ -119,7 +118,10 @@ export const clashModule = fp<ClashPluginOptions>(async (app, opts) => {
   };
 
   const sendStatic = async (group: ClashResourceGroup, filename: string, reply: FastifyReply) => {
-    const filePath = await service.resolveStaticPath(group, filename).catch(() => null);
+    const filePath = await service.resolveStaticPath(group, filename).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    });
     if (!filePath) {
       throw new AppError('CLASH_NOT_FOUND', 'resource not found', 404);
     }
